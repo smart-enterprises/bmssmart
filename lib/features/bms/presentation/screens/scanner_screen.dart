@@ -1,6 +1,11 @@
 // lib/features/bms/presentation/screens/ble_scanner_screen.dart
 //
-// Handles permissions, scanning, device list, and navigation to dashboard.
+// Handles permissions, scanning, device list, and connecting. This is the
+// Connection tab body — BleScannerScreenBody is the content (no Scaffold);
+// BleScannerScreen is a thin Scaffold wrapper kept only so this screen stays
+// independently pushable/testable. The permission/scan/connect state
+// machine is unchanged from the pre-M3 version — only the widget tree and
+// the connect-tail navigation changed.
 
 import 'dart:async';
 import 'dart:io';
@@ -13,21 +18,33 @@ import 'package:smartbms/features/bms/presentation/screens/qr_scanner.dart';
 
 import '../../../../core/ble/ble_service.dart';
 import '../../../../core/persistence/last_device_store.dart';
-import '../../../../core/theme/app_theme.dart';
+import '../../../../core/theme/m3_theme.dart';
+import '../../../../core/widgets/m3_dialog.dart';
+import '../../../../core/widgets/m3_list_card.dart';
+import '../../../../core/widgets/m3_list_item.dart';
+import '../../../../core/widgets/m3_top_app_bar.dart';
 import '../providers/bms_provider.dart';
 import '../widget/manual_mac_dialog.dart';
 
-import 'bms_dashboard.dart';
 import 'debug_log_screen.dart';
 
-class BleScannerScreen extends ConsumerStatefulWidget {
+class BleScannerScreen extends StatelessWidget {
   const BleScannerScreen({super.key});
 
   @override
-  ConsumerState<BleScannerScreen> createState() => _BleScannerScreenState();
+  Widget build(BuildContext context) {
+    return const Scaffold(backgroundColor: M3Colors.surface, body: BleScannerScreenBody());
+  }
 }
 
-class _BleScannerScreenState extends ConsumerState<BleScannerScreen> {
+class BleScannerScreenBody extends ConsumerStatefulWidget {
+  const BleScannerScreenBody({super.key});
+
+  @override
+  ConsumerState<BleScannerScreenBody> createState() => _BleScannerScreenBodyState();
+}
+
+class _BleScannerScreenBodyState extends ConsumerState<BleScannerScreenBody> {
   // ── State ──────────────────────────────────────────────────────────────────
   final List<ScanResult> _scanResults = [];
   bool _isScanning = false;
@@ -204,27 +221,19 @@ class _BleScannerScreenState extends ConsumerState<BleScannerScreen> {
         // Show a dialog with instructions. We don't auto-launch the Location
         // settings screen because that would require an extra dependency
         // (app_settings) and is a quick action for the user anyway.
-        showDialog<void>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Turn on Location', style: TextStyle(color: AppColors.text)),
-            content: const Text(
-              'Android requires Location (GPS) to be turned on for Bluetooth '
+        showM3Dialog(
+          context,
+          icon: Icons.location_on_outlined,
+          title: 'Turn on Location',
+          message: 'Android requires Location (GPS) to be turned on for Bluetooth '
               'scanning on this version of the OS.\n\n'
               'How to fix:\n'
               '1. Pull down the notification shade\n'
               '2. Tap the Location icon to enable it\n'
               '3. Return here and tap Scan again\n\n'
               'SmartBMS does not use your location data.',
-              style: TextStyle(color: AppColors.textSec, height: 1.5),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(),
-                child: const Text('Got it', style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600)),
-              ),
-            ],
-          ),
+          showCancel: false,
+          okLabel: 'Got it',
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Scan failed: $e')));
@@ -277,7 +286,9 @@ class _BleScannerScreenState extends ConsumerState<BleScannerScreen> {
     if (!mounted) return;
     setState(() => _connectingToId = null);
 
-    Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const BmsDashboard()));
+    // Switch to the Home tab — bleDeviceProvider changing already makes it
+    // reactively show the connected dashboard, no Navigator push needed.
+    ref.read(shellTabIndexProvider.notifier).state = 0;
   }
 
   /// Reconnects to the remembered device without scanning — flutter_blue_plus
@@ -291,47 +302,30 @@ class _BleScannerScreenState extends ConsumerState<BleScannerScreen> {
   // ── Build ──────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: DecoratedBox(
-        decoration: const BoxDecoration(gradient: appBackgroundGradient),
-        child: Stack(
-          children: [
-            const AmbientBackground(),
-            SafeArea(
-              child: Column(
-                children: [
-                  _buildHeader(),
-                  Expanded(child: _buildBody()),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHeader() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 12, 8),
-      child: Row(
+    return Container(
+      color: M3Colors.surface,
+      child: Column(
         children: [
-          const Expanded(
-            child: Text(
-              'SmartBMS',
-              style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w800, fontSize: 20, letterSpacing: 0.4),
+          M3TopAppBar(
+            eyebrow: const Text('Bluetooth'),
+            title: const Text('Connect a battery'),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_isScanning)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 10),
+                    child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: M3Colors.primary)),
+                  ),
+                _CircleIconButton(
+                  icon: Icons.bug_report_outlined,
+                  tooltip: 'Debug log',
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DebugLogScreen())),
+                ),
+              ],
             ),
           ),
-          if (_isScanning)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 10),
-              child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary)),
-            ),
-          _GlassIconButton(
-            icon: Icons.bug_report_outlined,
-            tooltip: 'Debug log',
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DebugLogScreen())),
-          ),
+          Expanded(child: _buildBody()),
         ],
       ),
     );
@@ -343,33 +337,21 @@ class _BleScannerScreenState extends ConsumerState<BleScannerScreen> {
     final connecting = _connectingToId == last.remoteId;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-      child: GlassCard(
-        radius: 14,
-        padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
-        child: Row(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      child: M3ListItem(
+        icon: Icons.history,
+        iconColor: M3Colors.primary,
+        iconBg: M3Colors.primaryContainer,
+        headline: name,
+        supporting: 'Last connected',
+        last: true,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.history, color: AppColors.primary, size: 18),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Last connected', style: TextStyle(color: AppColors.textSec, fontSize: 11)),
-                  Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: AppColors.text, fontSize: 14, fontWeight: FontWeight.w600),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            _OrangeButton(label: connecting ? 'Connecting…' : 'Reconnect', onPressed: connecting ? () {} : _reconnectLast, compact: true),
+            _FilledPillButton(label: connecting ? 'Connecting…' : 'Reconnect', onPressed: connecting ? () {} : _reconnectLast),
             IconButton(
               tooltip: 'Forget',
-              icon: const Icon(Icons.close, color: AppColors.textSec, size: 18),
+              icon: const Icon(Icons.close, color: M3Colors.onSurfaceVariant, size: 18),
               onPressed: () async {
                 await LastDeviceStore.clear();
                 if (mounted) setState(() => _lastDevice = null);
@@ -386,11 +368,13 @@ class _BleScannerScreenState extends ConsumerState<BleScannerScreen> {
       return _buildPermissionError();
     }
 
-    return Column(
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, 100),
       children: [
         if (_lastDevice != null) _buildReconnectBanner(),
+        _buildQrPromo(),
         _buildScanHeader(),
-        Expanded(child: _scanResults.isEmpty ? _buildEmptyState() : _buildDeviceList()),
+        _scanResults.isEmpty ? _buildEmptyState() : _buildDeviceList(),
       ],
     );
   }
@@ -402,12 +386,52 @@ class _BleScannerScreenState extends ConsumerState<BleScannerScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.bluetooth_disabled, size: 64, color: AppColors.danger),
+            const Icon(Icons.bluetooth_disabled, size: 64, color: M3Colors.primary),
             const SizedBox(height: 20),
-            Text(_permissionError!, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.textSec, fontSize: 15)),
+            Text(_permissionError!, textAlign: TextAlign.center, style: const TextStyle(color: M3Colors.onSurfaceVariant, fontSize: 15)),
             const SizedBox(height: 24),
-            _OrangeButton(label: 'Open Settings', onPressed: openAppSettings),
+            _FilledPillButton(label: 'Open Settings', onPressed: openAppSettings, large: true),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQrPromo() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      child: Material(
+        color: M3Colors.primaryContainer,
+        borderRadius: BorderRadius.circular(M3Radii.tile),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(M3Radii.tile),
+          onTap: _openQrScan,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            child: Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14)),
+                  child: const Icon(Icons.qr_code_scanner, color: M3Colors.primary, size: 20),
+                ),
+                const SizedBox(width: 14),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Scan QR code', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: M3Colors.onPrimaryContainer)),
+                      SizedBox(height: 2),
+                      Text("Pair instantly from the pack's label",
+                          style: TextStyle(fontSize: 12, color: M3Colors.onPrimaryContainer)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right, size: 16, color: M3Colors.onPrimaryContainer),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -415,39 +439,33 @@ class _BleScannerScreenState extends ConsumerState<BleScannerScreen> {
 
   Widget _buildScanHeader() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-      child: GlassCard(
-        radius: 14,
-        padding: const EdgeInsets.fromLTRB(16, 12, 10, 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _isScanning ? 'Scanning for BMS devices...' : 'Tap to scan for devices',
-                    style: const TextStyle(color: AppColors.text, fontSize: 15, fontWeight: FontWeight.w500),
-                  ),
-                  if (_scanResults.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 3),
-                      child: Text(
-                        '${_scanResults.length} device${_scanResults.length == 1 ? '' : 's'} found',
-                        style: const TextStyle(color: AppColors.textSec, fontSize: 12),
-                      ),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _isScanning ? 'Scanning for BMS devices…' : 'Tap to scan for devices',
+                  style: const TextStyle(color: M3Colors.onSurface, fontSize: 15, fontWeight: FontWeight.w500),
+                ),
+                if (_scanResults.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      '${_scanResults.length} device${_scanResults.length == 1 ? '' : 's'} found',
+                      style: const TextStyle(color: M3Colors.onSurfaceVariant, fontSize: 12),
                     ),
-                ],
-              ),
+                  ),
+              ],
             ),
-            const SizedBox(width: 12),
-            _IconActionButton(icon: Icons.keyboard, tooltip: 'Enter MAC manually', onPressed: _openManualMac),
-            const SizedBox(width: 8),
-            _IconActionButton(icon: Icons.qr_code_scanner, tooltip: 'Scan QR code', onPressed: _openQrScan),
-            const SizedBox(width: 8),
-            _OrangeButton(label: _isScanning ? 'Stop' : 'Scan', onPressed: _isScanning ? _stopScan : _startScan, compact: true),
-          ],
-        ),
+          ),
+          const SizedBox(width: 12),
+          _CircleIconButton(icon: Icons.keyboard, tooltip: 'Enter MAC manually', onPressed: _openManualMac),
+          const SizedBox(width: 8),
+          _FilledPillButton(label: _isScanning ? 'Stop' : 'Scan', onPressed: _isScanning ? _stopScan : _startScan),
+        ],
       ),
     );
   }
@@ -463,76 +481,84 @@ class _BleScannerScreenState extends ConsumerState<BleScannerScreen> {
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.bluetooth_searching, size: 72, color: AppColors.primary.withValues(alpha: 0.4)),
-          const SizedBox(height: 16),
-          const Text('No devices found', style: TextStyle(color: AppColors.text, fontSize: 16, fontWeight: FontWeight.w500)),
-          const SizedBox(height: 6),
-          const Text(
-            'Make sure your BMS is powered on\nand in range',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.textSec, fontSize: 13),
-          ),
-          const SizedBox(height: 28),
-          if (!_isScanning) ...[
-            _OrangeButton(label: 'Start Scanning', onPressed: _startScan),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                TextButton.icon(
-                  onPressed: _openQrScan,
-                  icon: const Icon(Icons.qr_code_scanner, size: 16),
-                  label: const Text('Scan QR'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.textSec,
-                    textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-                  ),
-                ),
-                Container(width: 1, height: 14, color: AppColors.border, margin: const EdgeInsets.symmetric(horizontal: 4)),
-                TextButton.icon(
-                  onPressed: _openManualMac,
-                  icon: const Icon(Icons.keyboard, size: 16),
-                  label: const Text('Enter MAC'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.textSec,
-                    textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
-                  ),
-                ),
-              ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.bluetooth_searching, size: 72, color: M3Colors.primary.withValues(alpha: 0.35)),
+            const SizedBox(height: 16),
+            const Text('No devices found', style: TextStyle(color: M3Colors.onSurface, fontSize: 16, fontWeight: FontWeight.w500)),
+            const SizedBox(height: 6),
+            const Text(
+              'Make sure your BMS is powered on\nand in range',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: M3Colors.onSurfaceVariant, fontSize: 13),
             ),
+            const SizedBox(height: 28),
+            if (!_isScanning) ...[
+              _FilledPillButton(label: 'Start Scanning', onPressed: _startScan, large: true),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  TextButton.icon(
+                    onPressed: _openQrScan,
+                    icon: const Icon(Icons.qr_code_scanner, size: 16),
+                    label: const Text('Scan QR'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: M3Colors.onSurfaceVariant,
+                      textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                  Container(width: 1, height: 14, color: M3Colors.outlineVariant, margin: const EdgeInsets.symmetric(horizontal: 4)),
+                  TextButton.icon(
+                    onPressed: _openManualMac,
+                    icon: const Icon(Icons.keyboard, size: 16),
+                    label: const Text('Enter MAC'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: M3Colors.onSurfaceVariant,
+                      textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildDeviceList() {
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-      itemCount: _scanResults.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 8),
-      itemBuilder: (context, index) {
-        final result = _scanResults[index];
-        return _DeviceTile(
-          result: result,
-          isConnecting: _connectingToId == result.device.remoteId.str,
-          onTap: () => _connectToDevice(result.device),
-        );
-      },
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
+      child: M3ListCard(
+        title: 'NEARBY DEVICES',
+        child: Column(
+          children: [
+            for (var i = 0; i < _scanResults.length; i++)
+              _DeviceTile(
+                result: _scanResults[i],
+                isConnecting: _connectingToId == _scanResults[i].device.remoteId.str,
+                last: i == _scanResults.length - 1,
+                onTap: () => _connectToDevice(_scanResults[i].device),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
 
 // ── Device tile ───────────────────────────────────────────────────────────────
 class _DeviceTile extends StatelessWidget {
-  const _DeviceTile({required this.result, required this.isConnecting, required this.onTap});
+  const _DeviceTile({required this.result, required this.isConnecting, required this.last, required this.onTap});
 
   final ScanResult result;
   final bool isConnecting;
+  final bool last;
   final VoidCallback onTap;
 
   String get _displayName {
@@ -541,98 +567,65 @@ class _DeviceTile extends StatelessWidget {
   }
 
   /// Daly's Bluetooth modules advertise as `DL-<mac>` and expose the fff0
-  /// transparent-UART service. Either signal alone is enough to flag it.
-  bool get _looksLikeDaly {
-    if (result.device.platformName.toUpperCase().startsWith('DL-')) return true;
-    return result.advertisementData.serviceUuids.any((uuid) => uuid.toString().toLowerCase().contains('fff0'));
+  /// transparent-UART service; either signal alone is enough to flag it. JBD
+  /// modules don't have a consistent name prefix across rebrands (Overkill
+  /// Solar, EBM, etc.), so ff00 is the only reliable signal there.
+  String? get _detectedProtocolLabel {
+    final name = result.device.platformName.toUpperCase();
+    final uuids = result.advertisementData.serviceUuids.map((u) => u.toString().toLowerCase());
+    if (name.startsWith('DL-') || uuids.any((u) => u.contains('fff0'))) return 'Daly BMS';
+    if (uuids.any((u) => u.contains('ff00'))) return 'JBD BMS';
+    return null;
   }
 
   Color get _rssiColor {
-    if (result.rssi >= -60) return AppColors.success;
-    if (result.rssi >= -80) return const Color(0xFFD29922);
-    return AppColors.danger;
-  }
-
-  IconData get _rssiIcon {
-    if (result.rssi >= -60) return Icons.signal_wifi_4_bar;
-    if (result.rssi >= -80) return Icons.signal_wifi_4_bar_lock;
-    return Icons.signal_wifi_bad;
+    if (result.rssi >= -60) return M3Colors.success;
+    if (result.rssi >= -80) return M3Colors.warningAmber;
+    return M3Colors.primary;
   }
 
   @override
   Widget build(BuildContext context) {
-    return GlassCard(
-      radius: 14,
-      padding: EdgeInsets.zero,
-      child: InkWell(
-        onTap: isConnecting ? null : onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: AppColors.primarySoft,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.memory, color: AppColors.primary, size: 22),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(_displayName, style: const TextStyle(color: AppColors.text, fontWeight: FontWeight.w600, fontSize: 15)),
-                    const SizedBox(height: 2),
-                    Text(result.device.remoteId.str, style: const TextStyle(color: AppColors.textSec, fontSize: 11)),
-                    if (_looksLikeDaly)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 3),
-                        child: Text('✓ Daly BMS', style: TextStyle(color: AppColors.success, fontSize: 11, fontWeight: FontWeight.w600)),
-                      ),
-                  ],
-                ),
-              ),
-              if (isConnecting)
-                const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.primary))
-              else
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(_rssiIcon, color: _rssiColor, size: 16),
-                    const SizedBox(width: 4),
-                    Text('${result.rssi} dBm', style: TextStyle(color: _rssiColor, fontSize: 12)),
-                  ],
-                ),
-            ],
-          ),
-        ),
-      ),
+    final protocol = _detectedProtocolLabel;
+    final supporting = protocol != null ? '${result.device.remoteId.str} · ✓ $protocol' : result.device.remoteId.str;
+    return M3ListItem(
+      icon: Icons.memory,
+      iconColor: M3Colors.primary,
+      iconBg: M3Colors.primaryContainer,
+      headline: _displayName,
+      supporting: supporting,
+      last: last,
+      onTap: isConnecting ? null : onTap,
+      trailing: isConnecting
+          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.5, color: M3Colors.primary))
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('${result.rssi} dBm', style: TextStyle(color: _rssiColor, fontSize: 12)),
+              ],
+            ),
     );
   }
 }
 
-// ── Reusable orange button ────────────────────────────────────────────────────
-class _OrangeButton extends StatelessWidget {
-  const _OrangeButton({required this.label, required this.onPressed, this.compact = false});
+// ── Filled pill button (M3 filled button, used in the Connection tab) ────────
+class _FilledPillButton extends StatelessWidget {
+  const _FilledPillButton({required this.label, required this.onPressed, this.large = false});
 
   final String label;
   final VoidCallback onPressed;
-  final bool compact;
+  final bool large;
 
   @override
   Widget build(BuildContext context) {
-    return ElevatedButton(
+    return FilledButton(
       onPressed: onPressed,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: AppColors.primary,
+      style: FilledButton.styleFrom(
+        backgroundColor: M3Colors.primary,
         foregroundColor: Colors.white,
         elevation: 0,
-        padding: compact ? const EdgeInsets.symmetric(horizontal: 18, vertical: 10) : const EdgeInsets.symmetric(horizontal: 28, vertical: 13),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        padding: large ? const EdgeInsets.symmetric(horizontal: 28, vertical: 14) : const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
         textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
       ),
       child: Text(label),
@@ -640,9 +633,9 @@ class _OrangeButton extends StatelessWidget {
   }
 }
 
-// ── Square icon-only button ───────────────────────────────────────────────────
-class _IconActionButton extends StatelessWidget {
-  const _IconActionButton({required this.icon, required this.tooltip, required this.onPressed});
+// ── Circle icon-only button ───────────────────────────────────────────────────
+class _CircleIconButton extends StatelessWidget {
+  const _CircleIconButton({required this.icon, required this.tooltip, required this.onPressed});
 
   final IconData icon;
   final String tooltip;
@@ -653,44 +646,18 @@ class _IconActionButton extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: AppColors.chipBg,
-        borderRadius: BorderRadius.circular(10),
+        color: Colors.white,
+        shape: const CircleBorder(),
         child: InkWell(
           onTap: onPressed,
-          borderRadius: BorderRadius.circular(10),
+          customBorder: const CircleBorder(),
           child: Container(
-            padding: const EdgeInsets.all(11),
-            decoration: BoxDecoration(border: Border.all(color: AppColors.chipBorder), borderRadius: BorderRadius.circular(10)),
-            child: Icon(icon, color: AppColors.primary, size: 18),
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            child: Icon(icon, color: M3Colors.onSurfaceVariant, size: 18),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _GlassIconButton extends StatelessWidget {
-  const _GlassIconButton({required this.icon, required this.tooltip, required this.onPressed});
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return IconButton(
-      tooltip: tooltip,
-      onPressed: onPressed,
-      icon: Container(
-        width: 38,
-        height: 38,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: AppColors.chipBg,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.chipBorder),
-        ),
-        child: Icon(icon, color: AppColors.textSec, size: 18),
       ),
     );
   }

@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/legacy.dart';
 
 import '../../../../core/ble/ble_service.dart';
 import '../../../../core/diagnostics/app_logger.dart';
+import '../../../../core/persistence/last_device_store.dart';
 import '../../data/models/bms_models.dart';
 
 // ── Device provider ──────────────────────────────────────────────────────────
@@ -73,3 +74,19 @@ final bmsStatusProvider = Provider.autoDispose<ChargeStatus?>(
 final bmsCellVoltagesProvider = Provider.autoDispose<List<double>?>(
   (ref) => ref.watch(bmsSnapshotProvider).value?.cellVoltages,
 );
+
+// ── Remembered device name ───────────────────────────────────────────────────
+/// A silent reconnect (splash screen) rebuilds the device from just its id
+/// (`BluetoothDevice.fromId`), which carries no name — flutter_blue_plus only
+/// populates `platformName` from a scan result. The name saved at the last
+/// successful connect fills that gap.
+final lastDeviceNameProvider = FutureProvider<String?>((ref) async {
+  final last = await LastDeviceStore.load();
+  return last?.name;
+});
+
+// ── Shell navigation ─────────────────────────────────────────────────────────
+/// Which HomeShell tab (0=Home, 1=History, 2=Connection) is active. Lets code
+/// outside HomeShell's own widget tree (manual-MAC dialog, connect flow,
+/// disconnect action) switch tabs without a Navigator call.
+final shellTabIndexProvider = StateProvider<int>((ref) => 0);

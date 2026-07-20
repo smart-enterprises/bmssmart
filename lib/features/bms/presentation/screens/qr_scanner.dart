@@ -14,9 +14,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../../../core/ble/ble_service.dart';
-import '../../../../core/theme/app_theme.dart';
+import '../../../../core/theme/m3_theme.dart';
 import '../providers/bms_provider.dart';
-import 'bms_dashboard.dart';
 
 class QrScanScreen extends ConsumerStatefulWidget {
   const QrScanScreen({super.key});
@@ -217,9 +216,12 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
     }
 
     if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const BmsDashboard()),
-    );
+    // Close the scanner and switch to the Home tab — it's pushed on top of
+    // HomeShell, so popping reveals the shell (with its nav bar) again.
+    // bleDeviceProvider changing already makes the Home tab reactively show
+    // the connected dashboard.
+    ref.read(shellTabIndexProvider.notifier).state = 0;
+    Navigator.of(context).pop();
   }
 
   void _showError(String message) {
@@ -302,23 +304,23 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
         elevation: 0,
         title: const Text(
           'Scan BMS QR Code',
-          style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w700),
+          style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w400),
         ),
-        iconTheme: const IconThemeData(color: Color(0xFF8B949E)),
+        iconTheme: const IconThemeData(color: M3Colors.inverseOnSurface),
         actions: [
           IconButton(
             tooltip: 'Pick from gallery',
-            icon: const Icon(Icons.photo_library_outlined, color: Color(0xFF8B949E)),
+            icon: const Icon(Icons.photo_library_outlined, color: M3Colors.inverseOnSurface),
             onPressed: _pickFromGallery,
           ),
           IconButton(
             icon: ValueListenableBuilder(
               valueListenable: _camera,
-              builder: (_, state, __) {
+              builder: (_, state, _) {
                 final on = state.torchState == TorchState.on;
                 return Icon(
                   on ? Icons.flash_on : Icons.flash_off,
-                  color: on ? AppColors.primary : const Color(0xFF8B949E),
+                  color: on ? M3Colors.primary : M3Colors.inverseOnSurface,
                 );
               },
             ),
@@ -400,7 +402,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
                     'Align the QR code on your BMS\nwithin the frame',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.95),
+                      color: Colors.white.withValues(alpha: 0.95),
                       fontSize: 14,
                       height: 1.5,
                       shadows: const [
@@ -420,7 +422,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
   // ── Status / Error cards ───────────────────────────────────────────────────
   Widget _buildStatusCard() {
     final isError = _errorMessage != null;
-    final color = isError ? AppColors.danger : AppColors.primary;
+    final color = isError ? M3Colors.primary : M3Colors.primary;
 
     return Positioned(
       left: 20,
@@ -429,15 +431,10 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
       child: Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: const Color(0xFF161B22),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: color.withOpacity(0.4), width: 1),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.4),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            ),
+          color: M3Colors.inverseSurface,
+          borderRadius: BorderRadius.circular(M3Radii.tile),
+          boxShadow: const [
+            BoxShadow(color: Color(0x66000000), blurRadius: 16, offset: Offset(0, 4)),
           ],
         ),
         child: Column(
@@ -462,7 +459,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
                   isError ? 'Failed' : 'Working...',
                   style: TextStyle(
                     color: color,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w600,
                     fontSize: 14,
                     letterSpacing: 0.5,
                   ),
@@ -473,7 +470,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
             Text(
               _errorMessage ?? _statusMessage ?? '',
               style: const TextStyle(
-                color: Color(0xFFE6EDF3),
+                color: M3Colors.inverseOnSurface,
                 fontSize: 13.5,
                 height: 1.5,
               ),
@@ -491,7 +488,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
                       style: TextStyle(fontWeight: FontWeight.w600),
                     ),
                     style: TextButton.styleFrom(
-                      foregroundColor: const Color(0xFF8B949E),
+                      foregroundColor: M3Colors.inverseOnSurface,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 12,
                         vertical: 8,
@@ -502,7 +499,7 @@ class _QrScanScreenState extends ConsumerState<QrScanScreen> {
                   TextButton(
                     onPressed: _retry,
                     style: TextButton.styleFrom(
-                      foregroundColor: AppColors.primary,
+                      foregroundColor: M3Colors.primary,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 16,
                         vertical: 8,
@@ -537,12 +534,12 @@ class _CameraErrorView extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.no_photography, color: Colors.red.shade400, size: 60),
+            const Icon(Icons.no_photography, color: M3Colors.primary, size: 60),
             const SizedBox(height: 16),
             const Text(
               'Camera unavailable',
               style: TextStyle(
-                color: Color(0xFFE6EDF3),
+                color: M3Colors.inverseOnSurface,
                 fontSize: 17,
                 fontWeight: FontWeight.w600,
               ),
@@ -551,7 +548,7 @@ class _CameraErrorView extends StatelessWidget {
             Text(
               error.errorDetails?.message ?? error.errorCode.name,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Color(0xFF8B949E), fontSize: 13),
+              style: TextStyle(color: M3Colors.inverseOnSurface.withValues(alpha: 0.7), fontSize: 13),
             ),
           ],
         ),
@@ -565,7 +562,7 @@ class _CornerBracketPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = AppColors.primary
+      ..color = M3Colors.primary
       ..strokeWidth = 4
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;

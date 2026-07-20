@@ -14,8 +14,7 @@ import '../../../../core/ble/ble_service.dart';
 import '../../../../core/persistence/last_device_store.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../providers/bms_provider.dart';
-import 'bms_dashboard.dart';
-import 'scanner_screen.dart';
+import 'home_shell.dart';
 
 class SplashScreen extends ConsumerStatefulWidget {
   const SplashScreen({super.key});
@@ -53,7 +52,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => connected ? const BmsDashboard() : const BleScannerScreen(),
+        builder: (_) => HomeShell(initialTabIndex: connected ? 0 : 2),
       ),
     );
   }
@@ -102,21 +101,10 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
           const DecoratedBox(decoration: BoxDecoration(gradient: appBackgroundGradient)),
           const AmbientBackground(),
           Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Image.asset(
-                  'assets/branding/warrior_loading.gif',
-                  width: 230,
-                  gaplessPlayback: true,
-                ),
-                const SizedBox(height: 40),
-                const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(strokeWidth: 2.4, color: AppColors.primary),
-                ),
-              ],
+            child: Image.asset(
+              'assets/branding/warrior_loading.gif',
+              width: 230,
+              gaplessPlayback: true,
             ),
           ),
         ],

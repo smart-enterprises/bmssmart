@@ -1,13 +1,19 @@
 // lib/features/bms/presentation/screens/history_screen.dart
 //
-// Time-series charts of the headline metrics, drawn with a CustomPainter so
-// the app needs no charting dependency. Data comes from the live service's
-// rolling history buffer; the screen repaints as new points arrive.
+// Time-series charts of the headline metrics, drawn with M3LineChart (a
+// CustomPainter, so the app needs no charting dependency). Data comes from
+// the live service's rolling history buffer; the screen repaints as new
+// points arrive. Content is unchanged from the pre-M3 version — this is a
+// pure restyle, still the History tab body (no back button: it's a
+// persistent tab now, not a pushed screen).
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/theme/app_theme.dart';
+import '../../../../core/theme/m3_theme.dart';
+import '../../../../core/widgets/m3_line_chart.dart';
+import '../../../../core/widgets/m3_list_card.dart';
+import '../../../../core/widgets/m3_top_app_bar.dart';
 import '../../data/models/bms_models.dart';
 import '../providers/bms_provider.dart';
 
@@ -21,36 +27,12 @@ class HistoryScreen extends ConsumerWidget {
     final service = ref.watch(bmsBleServiceProvider);
     final points = service?.history ?? const <HistoryPoint>[];
 
-    return Scaffold(
-      body: DecoratedBox(
-        decoration: const BoxDecoration(gradient: appBackgroundGradient),
-        child: Stack(
-          children: [
-            const AmbientBackground(),
-            SafeArea(
-              child: Column(
-                children: [
-                  _buildHeader(context),
-                  Expanded(child: points.length < 2 ? _empty() : _buildList(points)),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHeader(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 8, 20, 8),
-      child: Row(
+    return Container(
+      color: M3Colors.surface,
+      child: Column(
         children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back, color: AppColors.textSec),
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-          const Text('History', style: TextStyle(color: AppColors.text, fontWeight: FontWeight.w700, fontSize: 19)),
+          const M3TopAppBar(eyebrow: Text('Battery'), title: Text('History')),
+          Expanded(child: points.length < 2 ? _empty() : _buildList(points)),
         ],
       ),
     );
@@ -58,12 +40,12 @@ class HistoryScreen extends ConsumerWidget {
 
   Widget _buildList(List<HistoryPoint> points) {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 100),
       children: [
         _ChartCard(
           title: 'State of Charge',
           unit: '%',
-          color: AppColors.success,
+          color: M3Colors.success,
           points: points,
           value: (p) => p.soc,
           fixedMin: 0,
@@ -74,7 +56,7 @@ class HistoryScreen extends ConsumerWidget {
         _ChartCard(
           title: 'Pack Voltage',
           unit: 'V',
-          color: AppColors.primary,
+          color: M3Colors.primary,
           points: points,
           value: (p) => p.voltage,
           decimals: 2,
@@ -83,7 +65,7 @@ class HistoryScreen extends ConsumerWidget {
         _ChartCard(
           title: 'Current',
           unit: 'A',
-          color: const Color(0xFF3B82F6),
+          color: M3Colors.tertiary,
           points: points,
           value: (p) => p.current,
           zeroBaseline: true,
@@ -93,7 +75,7 @@ class HistoryScreen extends ConsumerWidget {
         _ChartCard(
           title: 'Cell Imbalance (Δ)',
           unit: 'mV',
-          color: const Color(0xFFD29922),
+          color: M3Colors.warningAmber,
           points: points,
           value: (p) => p.deltaMv?.toDouble(),
           decimals: 0,
@@ -102,7 +84,7 @@ class HistoryScreen extends ConsumerWidget {
         Center(
           child: Text(
             '${points.length} samples · spanning ${_span(points)}',
-            style: const TextStyle(color: AppColors.textTertiary, fontSize: 12),
+            style: const TextStyle(color: M3Colors.outline, fontSize: 12),
           ),
         ),
       ],
@@ -122,12 +104,12 @@ class HistoryScreen extends ConsumerWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.show_chart, size: 52, color: AppColors.border),
+              Icon(Icons.show_chart, size: 52, color: M3Colors.outlineVariant),
               SizedBox(height: 16),
               Text(
                 'Collecting data…\nCharts appear once a few samples have arrived.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: AppColors.textSec, fontSize: 14, height: 1.5),
+                style: TextStyle(color: M3Colors.onSurfaceVariant, fontSize: 14, height: 1.5),
               ),
             ],
           ),
@@ -162,30 +144,23 @@ class _ChartCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final latest = _latestNonNull();
 
-    return GlassCard(
-      radius: 16,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(title, style: const TextStyle(color: AppColors.textSec, fontSize: 13)),
-              Text(
-                latest == null ? '—' : '${latest.toStringAsFixed(decimals)} $unit',
-                style: TextStyle(color: color, fontSize: 15, fontWeight: FontWeight.w700),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            height: 96,
-            width: double.infinity,
-            child: CustomPaint(
-              painter: _LinePainter(points: points, value: value, color: color, fixedMin: fixedMin, fixedMax: fixedMax, zeroBaseline: zeroBaseline),
-            ),
-          ),
-        ],
+    return M3ListCard(
+      title: title.toUpperCase(),
+      trailing: Text(
+        latest == null ? '—' : '${latest.toStringAsFixed(decimals)} $unit',
+        style: TextStyle(color: color, fontSize: 15, fontWeight: FontWeight.w700),
+      ),
+      child: SizedBox(
+        height: 96,
+        width: double.infinity,
+        child: M3LineChart<HistoryPoint>(
+          points: points,
+          value: value,
+          color: color,
+          fixedMin: fixedMin,
+          fixedMax: fixedMax,
+          zeroBaseline: zeroBaseline,
+        ),
       ),
     );
   }
@@ -197,108 +172,4 @@ class _ChartCard extends StatelessWidget {
     }
     return null;
   }
-}
-
-class _LinePainter extends CustomPainter {
-  _LinePainter({
-    required this.points,
-    required this.value,
-    required this.color,
-    this.fixedMin,
-    this.fixedMax,
-    this.zeroBaseline = false,
-  });
-
-  final List<HistoryPoint> points;
-  final double? Function(HistoryPoint) value;
-  final Color color;
-  final double? fixedMin;
-  final double? fixedMax;
-  final bool zeroBaseline;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final vals = <int, double>{};
-    for (var i = 0; i < points.length; i++) {
-      final v = value(points[i]);
-      if (v != null) vals[i] = v;
-    }
-    if (vals.length < 2) return;
-
-    var lo = fixedMin ?? vals.values.reduce((a, b) => a < b ? a : b);
-    var hi = fixedMax ?? vals.values.reduce((a, b) => a > b ? a : b);
-    if (zeroBaseline) {
-      lo = lo < 0 ? lo : 0;
-      hi = hi > 0 ? hi : 0;
-    }
-    if (hi - lo < 1e-9) {
-      // Flat line — pad so it renders mid-height instead of dividing by zero.
-      hi += 1;
-      lo -= 1;
-    }
-
-    final n = points.length;
-    double dx(int i) => n == 1 ? 0 : size.width * i / (n - 1);
-    double dy(double v) => size.height - (v - lo) / (hi - lo) * size.height;
-
-    final grid = Paint()
-      ..color = AppColors.trackBg
-      ..strokeWidth = 1;
-    for (var g = 0; g <= 2; g++) {
-      final y = size.height * g / 2;
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
-    }
-
-    // Zero line for current, if it falls inside the range.
-    if (zeroBaseline && lo < 0 && hi > 0) {
-      final zeroPaint = Paint()
-        ..color = AppColors.textTertiary
-        ..strokeWidth = 1;
-      final y = dy(0);
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), zeroPaint);
-    }
-
-    final path = Path();
-    final fill = Path();
-    var started = false;
-    for (var i = 0; i < n; i++) {
-      final v = vals[i];
-      if (v == null) continue;
-      final p = Offset(dx(i), dy(v));
-      if (!started) {
-        path.moveTo(p.dx, p.dy);
-        fill.moveTo(p.dx, size.height);
-        fill.lineTo(p.dx, p.dy);
-        started = true;
-      } else {
-        path.lineTo(p.dx, p.dy);
-        fill.lineTo(p.dx, p.dy);
-      }
-    }
-    fill.lineTo(dx(n - 1), size.height);
-    fill.close();
-
-    canvas.drawPath(
-      fill,
-      Paint()
-        ..style = PaintingStyle.fill
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [color.withValues(alpha: 0.22), color.withValues(alpha: 0.0)],
-        ).createShader(Offset.zero & size),
-    );
-
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..strokeJoin = StrokeJoin.round
-        ..color = color,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_LinePainter old) => old.points != points;
 }

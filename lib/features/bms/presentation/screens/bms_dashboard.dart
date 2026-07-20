@@ -1,9 +1,13 @@
 // lib/features/bms/presentation/screens/bms_dashboard.dart
 //
-// Glassmorphic BMS dashboard — light theme, orange accent, ported from the
-// approved design (bms-dashboard.jsx). Every field is nullable because Daly
+// Material 3 BMS dashboard — Home tab content, ported from the approved
+// design (bms-m3-dashboard.jsx). Every field is nullable because Daly
 // answers each command separately; the dashboard shows what has arrived and
 // omits pieces whose command hasn't been answered yet.
+//
+// BmsDashboardBody is the actual content (no Scaffold) — used directly by
+// HomeShell as the Home tab. BmsDashboard is a thin Scaffold wrapper kept
+// only so this screen stays independently pushable/testable.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -11,18 +15,27 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/ble/ble_service.dart';
 import '../../../../core/persistence/last_device_store.dart';
-import '../../../../core/theme/app_theme.dart';
-import '../../../../core/widgets/battery_gauge.dart';
-import '../../../../core/widgets/bms_widgets.dart';
-import '../../../../core/widgets/pill_switch.dart';
+import '../../../../core/theme/m3_theme.dart';
+import '../../../../core/widgets/m3_dialog.dart';
+import '../../../../core/widgets/m3_gauge.dart';
+import '../../../../core/widgets/m3_list_item.dart';
+import '../../../../core/widgets/m3_tile.dart';
+import '../../../../core/widgets/m3_tonal_button.dart';
 import '../../data/models/bms_models.dart';
 import '../providers/bms_provider.dart';
 import 'debug_log_screen.dart';
-import 'history_screen.dart';
-import 'scanner_screen.dart';
 
-class BmsDashboard extends ConsumerWidget {
+class BmsDashboard extends StatelessWidget {
   const BmsDashboard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(backgroundColor: M3Colors.surface, body: BmsDashboardBody());
+  }
+}
+
+class BmsDashboardBody extends ConsumerWidget {
+  const BmsDashboardBody({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -30,24 +43,15 @@ class BmsDashboard extends ConsumerWidget {
     final statusAsync = ref.watch(bleStatusProvider);
     final snapshotAsync = ref.watch(bmsSnapshotProvider);
 
-    return Scaffold(
-      body: DecoratedBox(
-        decoration: const BoxDecoration(gradient: appBackgroundGradient),
-        child: Stack(
-          children: [
-            const AmbientBackground(),
-            SafeArea(
-              child: Column(
-                children: [
-                  _Header(device: device, statusAsync: statusAsync),
-                  Expanded(
-                    child: _Body(snapshotAsync: snapshotAsync, statusAsync: statusAsync, deviceName: device?.platformName),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+    return Container(
+      color: M3Colors.surface,
+      child: Column(
+        children: [
+          _Header(device: device, statusAsync: statusAsync),
+          Expanded(
+            child: _Body(snapshotAsync: snapshotAsync, statusAsync: statusAsync, deviceName: device?.platformName),
+          ),
+        ],
       ),
     );
   }
@@ -61,44 +65,49 @@ class _Header extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final deviceName = device?.platformName;
-    final name = (deviceName != null && deviceName.isNotEmpty) ? deviceName : 'Pack 01';
+    final scannedName = device?.platformName;
+    // A silent reconnect loses platformName (see lastDeviceNameProvider) —
+    // fall back to the name saved at the last successful connect.
+    final rememberedName = ref.watch(lastDeviceNameProvider).value;
+    final name = (scannedName != null && scannedName.isNotEmpty)
+        ? scannedName
+        : (rememberedName != null && rememberedName.isNotEmpty ? rememberedName : 'BMS');
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 6),
-      child: Row(
+    final topInset = MediaQuery.of(context).padding.top;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(20, topInset + 12, 20, 20),
+      decoration: const BoxDecoration(
+        color: M3Colors.surfaceContainerLow,
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(M3Radii.topBar),
+          bottomRight: Radius.circular(M3Radii.topBar),
+        ),
+      ),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        '$name · LiFePO₄',
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13, color: AppColors.textSec, fontWeight: FontWeight.w500),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    statusAsync.when(
-                      data: (s) => _StatusDot(state: s.state),
-                      loading: () => const _StatusDot(state: BleConnectionState.connecting),
-                      error: (_, _) => const _StatusDot(state: BleConnectionState.error),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                const Text(
-                  'Battery',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: AppColors.text, letterSpacing: -0.4),
-                ),
-              ],
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Image.asset('assets/branding/warrior_logo.png', height: 28, fit: BoxFit.contain, alignment: Alignment.centerLeft),
+              ),
+              _MoreButton(onSelected: (action) => _handleMenu(context, ref, action)),
+            ],
           ),
-          _MoreButton(onSelected: (action) => _handleMenu(context, ref, action)),
+          const SizedBox(height: 6),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(child: Text(name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: M3Colors.onSurfaceVariant))),
+              const SizedBox(width: 8),
+              statusAsync.when(
+                data: (s) => _StatusDot(state: s.state),
+                loading: () => const _StatusDot(state: BleConnectionState.connecting),
+                error: (_, _) => const _StatusDot(state: BleConnectionState.error),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -106,8 +115,6 @@ class _Header extends ConsumerWidget {
 
   Future<void> _handleMenu(BuildContext context, WidgetRef ref, _MenuAction action) async {
     switch (action) {
-      case _MenuAction.history:
-        Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HistoryScreen()));
       case _MenuAction.debugLog:
         Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DebugLogScreen()));
       case _MenuAction.forget:
@@ -119,14 +126,12 @@ class _Header extends ConsumerWidget {
         }
       case _MenuAction.disconnect:
         ref.read(bleDeviceProvider.notifier).state = null;
-        if (context.mounted) {
-          Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const BleScannerScreen()));
-        }
+        ref.read(shellTabIndexProvider.notifier).state = 2;
     }
   }
 }
 
-enum _MenuAction { history, debugLog, forget, disconnect }
+enum _MenuAction { debugLog, forget, disconnect }
 
 class _MoreButton extends StatelessWidget {
   const _MoreButton({required this.onSelected});
@@ -140,21 +145,29 @@ class _MoreButton extends StatelessWidget {
         width: 38,
         height: 38,
         alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: AppColors.chipBg,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.chipBorder),
-        ),
-        child: const Icon(Icons.more_horiz, color: AppColors.textSec, size: 18),
+        decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+        child: const Icon(Icons.more_horiz, color: M3Colors.onSurfaceVariant, size: 18),
       ),
-      color: AppColors.card,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      color: M3Colors.surfaceContainerHigh,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       itemBuilder: (context) => const [
-        PopupMenuItem(value: _MenuAction.history, child: Row(children: [Icon(Icons.show_chart, size: 18, color: AppColors.textSec), SizedBox(width: 12), Text('History')])),
-        PopupMenuItem(value: _MenuAction.debugLog, child: Row(children: [Icon(Icons.bug_report_outlined, size: 18, color: AppColors.textSec), SizedBox(width: 12), Text('Debug log')])),
+        PopupMenuItem(
+          value: _MenuAction.debugLog,
+          child: Row(children: [Icon(Icons.bug_report_outlined, size: 18, color: M3Colors.onSurfaceVariant), SizedBox(width: 12), Text('Debug log')]),
+        ),
         PopupMenuDivider(),
-        PopupMenuItem(value: _MenuAction.forget, child: Row(children: [Icon(Icons.link_off, size: 18, color: AppColors.textSec), SizedBox(width: 12), Text('Forget this device')])),
-        PopupMenuItem(value: _MenuAction.disconnect, child: Row(children: [Icon(Icons.logout, size: 18, color: AppColors.danger), SizedBox(width: 12), Text('Disconnect', style: TextStyle(color: AppColors.danger))])),
+        PopupMenuItem(
+          value: _MenuAction.forget,
+          child: Row(children: [Icon(Icons.link_off, size: 18, color: M3Colors.onSurfaceVariant), SizedBox(width: 12), Text('Forget this device')]),
+        ),
+        PopupMenuItem(
+          value: _MenuAction.disconnect,
+          child: Row(children: [
+            Icon(Icons.logout, size: 18, color: M3Colors.primary),
+            SizedBox(width: 12),
+            Text('Disconnect', style: TextStyle(color: M3Colors.primary)),
+          ]),
+        ),
       ],
     );
   }
@@ -167,10 +180,10 @@ class _StatusDot extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (label, color) = switch (state) {
-      BleConnectionState.connected => ('Connected', AppColors.success),
-      BleConnectionState.connecting => ('Connecting', AppColors.primary),
-      BleConnectionState.disconnected => ('Disconnected', AppColors.textSec),
-      BleConnectionState.error => ('Error', AppColors.danger),
+      BleConnectionState.connected => ('Connected', M3Colors.success),
+      BleConnectionState.connecting => ('Connecting', M3Colors.primary),
+      BleConnectionState.disconnected => ('Disconnected', M3Colors.onSurfaceVariant),
+      BleConnectionState.error => ('Error', M3Colors.primary),
     };
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -205,34 +218,36 @@ class _Body extends StatelessWidget {
   }
 }
 
-class _StatusMessage extends StatelessWidget {
-  const _StatusMessage({required this.icon, required this.iconColor, required this.title, this.subtitle, this.spinner = false});
+class _StatusMessage extends ConsumerWidget {
+  const _StatusMessage({required this.icon, required this.iconColor, required this.title, this.subtitle, this.spinner = false, this.showConnectCta = false});
 
   factory _StatusMessage.connecting(String? name) => _StatusMessage(
         icon: Icons.bluetooth_searching,
-        iconColor: AppColors.primary,
+        iconColor: M3Colors.primary,
         title: 'Connecting to ${name?.isNotEmpty == true ? name : 'device'}…',
         spinner: true,
       );
 
   factory _StatusMessage.error(String message) =>
-      _StatusMessage(icon: Icons.error_outline, iconColor: AppColors.danger, title: 'Connection error', subtitle: message);
+      _StatusMessage(icon: Icons.error_outline, iconColor: M3Colors.primary, title: 'Connection error', subtitle: message, showConnectCta: true);
 
   const _StatusMessage.disconnected()
       : icon = Icons.bluetooth_disabled,
-        iconColor = AppColors.textSec,
-        title = 'Disconnected',
-        subtitle = null,
-        spinner = false;
+        iconColor = M3Colors.onSurfaceVariant,
+        title = 'No battery connected',
+        subtitle = 'Connect a pack from the Connection tab to see live data here.',
+        spinner = false,
+        showConnectCta = true;
 
   final IconData icon;
   final Color iconColor;
   final String title;
   final String? subtitle;
   final bool spinner;
+  final bool showConnectCta;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -244,10 +259,22 @@ class _StatusMessage extends StatelessWidget {
             else
               Icon(icon, size: 48, color: iconColor),
             const SizedBox(height: 20),
-            Text(title, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.text, fontSize: 16, fontWeight: FontWeight.w600)),
+            Text(title, textAlign: TextAlign.center, style: const TextStyle(color: M3Colors.onSurface, fontSize: 16, fontWeight: FontWeight.w600)),
             if (subtitle != null) ...[
               const SizedBox(height: 8),
-              Text(subtitle!, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.textSec, fontSize: 13)),
+              Text(subtitle!, textAlign: TextAlign.center, style: const TextStyle(color: M3Colors.onSurfaceVariant, fontSize: 13)),
+            ],
+            if (showConnectCta) ...[
+              const SizedBox(height: 20),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: M3Colors.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                ),
+                onPressed: () => ref.read(shellTabIndexProvider.notifier).state = 2,
+                child: const Text('Connect a battery'),
+              ),
             ],
           ],
         ),
@@ -268,7 +295,7 @@ class _ConnectedBody extends StatelessWidget {
     if (snapshot == null || !snapshot.hasCoreData) {
       return const SingleChildScrollView(
         physics: AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.fromLTRB(20, 8, 20, 24),
+        padding: EdgeInsets.fromLTRB(20, 8, 20, 100),
         child: _WaitingCard(),
       );
     }
@@ -277,20 +304,10 @@ class _ConnectedBody extends StatelessWidget {
     final maxTemp = snapshot.maxObservedTempC;
     final tempSeverity = maxTemp == null ? TempSeverity.normal : tempThresholds.classify(maxTemp.toDouble());
 
-    final status = switch (snapshot.status) {
-      ChargeStatus.charging => GaugeStatus.charging,
-      ChargeStatus.discharging => GaugeStatus.discharging,
-      ChargeStatus.idle => GaugeStatus.idle,
-      null => GaugeStatus.idle,
-    };
-
+    final status = snapshot.status;
     final current = snapshot.currentAmps;
-    final isCharging = status == GaugeStatus.charging;
-    // isDischarging (derived from snapshot.status, which is only non-null when
-    // currentAmps is) implies current != null — but Dart can't prove that
-    // through the ChargeStatus indirection, so the checks below re-verify it
-    // directly rather than asserting with `!`.
-    final isDischarging = status == GaugeStatus.discharging;
+    final isCharging = status == ChargeStatus.charging;
+    final isDischarging = status == ChargeStatus.discharging;
     final runtimeHours = (isDischarging && snapshot.remainingAh != null && current != null)
         ? estimateRuntimeHours(remainingAh: snapshot.remainingAh!, loadAmps: current.abs())
         : null;
@@ -300,21 +317,30 @@ class _ConnectedBody extends StatelessWidget {
         : null;
 
     final String runtimeValue;
-    final String runtimeSublabel;
     if (isDischarging) {
       runtimeValue = formatDuration(runtimeHours);
-      runtimeSublabel = current != null ? 'at ${current.abs().toStringAsFixed(1)} A load' : 'no load';
     } else if (isCharging) {
       runtimeValue = timeToFullHours == 0 ? 'Full' : formatDuration(timeToFullHours);
-      runtimeSublabel = current != null ? 'to full at ${current.toStringAsFixed(1)} A' : 'plugged in';
     } else {
       runtimeValue = '—';
-      runtimeSublabel = 'no load';
     }
+
+    final statusLabel = switch (status) {
+      ChargeStatus.charging => 'charging',
+      ChargeStatus.discharging => 'discharging',
+      ChargeStatus.idle => 'idle',
+      null => 'idle',
+    };
+
+    // Byte 6 bit 4 is undocumented on this hardware but empirically just
+    // mirrors "discharge MOSFET off" — not a real fault. That state is
+    // already shown on the Discharge toggle button itself, so don't also
+    // raise it as an alarm.
+    final visibleFaults = snapshot.activeFaults?.where((f) => f != 'Alarm (byte 6 bit 4)').toList();
 
     return SingleChildScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 100),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -322,74 +348,54 @@ class _ConnectedBody extends StatelessWidget {
             _TempAlertBanner(tempC: maxTemp, severity: tempSeverity, thresholds: tempThresholds),
             const SizedBox(height: 12),
           ],
-          if (snapshot.hasFault) ...[
-            _FaultCard(faults: snapshot.activeFaults!),
+          if (visibleFaults != null && visibleFaults.isNotEmpty) ...[
+            _FaultCard(faults: visibleFaults),
             const SizedBox(height: 12),
           ],
 
-          // Gauge card with charge/discharge switches
-          GlassCard(
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
-            child: Column(
-              children: [
-                BatteryGauge(percent: snapshot.soc!, status: status, size: 240),
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.only(top: 18),
-                  margin: const EdgeInsets.only(top: 4),
-                  decoration: const BoxDecoration(
-                    border: Border(top: BorderSide(color: AppColors.trackBg)),
-                  ),
-                  child: _MosfetSwitchRow(chargeOn: snapshot.chargeMosOn, dischargeOn: snapshot.dischargeMosOn),
-                ),
-              ],
-            ),
+          Center(child: M3Gauge(percent: snapshot.soc!.round(), status: statusLabel, size: 228)),
+          const SizedBox(height: 20),
+
+          // Charging / Discharge tonal toggle row
+          Row(
+            children: [
+              _MosfetToggle(isCharge: true, on: snapshot.chargeMosOn),
+              const SizedBox(width: 10),
+              _MosfetToggle(isCharge: false, on: snapshot.dischargeMosOn),
+            ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 20),
 
           // 2x3 stat grid
           Row(
             children: [
               Expanded(
-                child: StatTile(
-                  label: 'Current',
+                child: M3Tile(
+                  label: isCharging ? 'Current · in' : (isDischarging ? 'Current · out' : 'Current · idle'),
                   value: current == null ? '—' : '${current >= 0 ? '+' : ''}${current.toStringAsFixed(2)}',
                   unit: 'A',
-                  color: isCharging ? AppColors.success : (isDischarging ? AppColors.danger : AppColors.text),
-                  sublabel: isCharging ? 'Energy in' : (isDischarging ? 'Energy out' : 'Resting'),
                   icon: isCharging ? Icons.arrow_upward : (isDischarging ? Icons.arrow_downward : Icons.pause),
-                  iconColor: isCharging ? AppColors.success : (isDischarging ? AppColors.danger : AppColors.textSec),
+                  tone: isCharging ? M3TileTone.success : (isDischarging ? M3TileTone.primary : M3TileTone.neutral),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: StatTile(
-                  label: 'Runtime',
-                  value: runtimeValue,
-                  sublabel: runtimeSublabel,
-                  icon: Icons.access_time,
-                ),
+                child: M3Tile(label: 'Runtime left', value: runtimeValue, icon: Icons.access_time, tone: M3TileTone.tertiary),
               ),
             ],
           ),
           const SizedBox(height: 12),
           Row(
             children: [
-              Expanded(
-                child: TemperatureCard(
-                  tempC: maxTemp?.toDouble(),
-                  thresholds: tempThresholds,
-                ),
-              ),
+              Expanded(child: M3TempTile(tempC: maxTemp?.toDouble() ?? 0)),
               const SizedBox(width: 12),
               Expanded(
-                child: StatTile(
-                  label: 'Total voltage',
+                child: M3Tile(
+                  label: '${snapshot.cellCount ?? snapshot.cellVoltages.length} cells · Total',
                   value: snapshot.packVoltage!.toStringAsFixed(2),
                   unit: 'V',
-                  sublabel: '${snapshot.cellCount ?? snapshot.cellVoltages.length} cells in series',
                   icon: Icons.bolt,
-                  iconColor: AppColors.primary,
+                  tone: M3TileTone.neutral,
                 ),
               ),
             ],
@@ -398,29 +404,29 @@ class _ConnectedBody extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: StatTile(
-                  label: 'Capacity',
+                child: M3Tile(
+                  label: 'Remaining capacity',
                   value: snapshot.remainingAh?.toStringAsFixed(1) ?? '—',
-                  unit: snapshot.nominalAh != null ? '/ ${snapshot.nominalAh!.toStringAsFixed(0)} Ah' : 'Ah',
-                  sublabel: 'Remaining',
+                  unit: 'Ah',
                   icon: Icons.battery_full,
-                  iconColor: AppColors.success,
+                  tone: M3TileTone.success,
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: StatTile(
-                  label: 'Cycles',
-                  value: snapshot.cycleCount?.toString() ?? '—',
-                  sublabel: 'Charge cycles',
-                  icon: Icons.refresh,
+                child: M3Tile(
+                  label: 'Total Ah',
+                  value: snapshot.nominalAh?.toStringAsFixed(0) ?? '—',
+                  unit: 'Ah',
+                  icon: Icons.battery_std,
+                  tone: M3TileTone.neutral,
                 ),
               ),
             ],
           ),
 
           if (snapshot.cellVoltages.isNotEmpty) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
             _CellVoltageCard(voltages: snapshot.cellVoltages, balancingCells: snapshot.balancingCells),
           ],
         ],
@@ -435,15 +441,17 @@ class _WaitingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassCard(
+    return Container(
+      decoration: BoxDecoration(color: M3Colors.surfaceContainerLow, borderRadius: BorderRadius.circular(M3Radii.card)),
+      padding: const EdgeInsets.all(18),
       child: Row(
         children: [
-          const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary)),
+          const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: M3Colors.primary)),
           const SizedBox(width: 14),
           const Expanded(
             child: Text(
               'Waiting for BMS data…\nOpen the debug log if this persists.',
-              style: TextStyle(color: AppColors.textSec, fontSize: 14, height: 1.4),
+              style: TextStyle(color: M3Colors.onSurfaceVariant, fontSize: 14, height: 1.4),
             ),
           ),
         ],
@@ -465,7 +473,7 @@ class _TempAlertBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isCritical = severity == TempSeverity.critical;
-    final color = isCritical ? AppColors.danger : const Color(0xFFD29922);
+    final color = isCritical ? M3Colors.primary : M3Colors.warningAmber;
     final title = isCritical ? 'Critical temperature' : 'Temperature warning';
     final limit = isCritical ? thresholds.criticalC : thresholds.warningC;
 
@@ -473,9 +481,8 @@ class _TempAlertBanner extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(M3Radii.tile),
       ),
       child: Row(
         children: [
@@ -488,7 +495,7 @@ class _TempAlertBanner extends StatelessWidget {
                 Text(title, style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 2),
                 Text('Now $tempC °C — at or above the $limit °C ${isCritical ? 'critical' : 'warning'} level.',
-                    style: const TextStyle(color: AppColors.text, fontSize: 13)),
+                    style: const TextStyle(color: M3Colors.onSurface, fontSize: 13)),
               ],
             ),
           ),
@@ -509,20 +516,19 @@ class _FaultCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.danger.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
+        color: M3Colors.primaryContainer,
+        borderRadius: BorderRadius.circular(M3Radii.tile),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.warning_amber_rounded, color: AppColors.danger, size: 18),
+              const Icon(Icons.warning_amber_rounded, color: M3Colors.primary, size: 18),
               const SizedBox(width: 8),
               Text(
                 faults.length == 1 ? '1 active alarm' : '${faults.length} active alarms',
-                style: const TextStyle(color: AppColors.danger, fontSize: 14, fontWeight: FontWeight.w700),
+                style: const TextStyle(color: M3Colors.primary, fontSize: 14, fontWeight: FontWeight.w700),
               ),
             ],
           ),
@@ -533,8 +539,8 @@ class _FaultCard extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('• ', style: TextStyle(color: AppColors.danger, fontSize: 13)),
-                  Expanded(child: Text(f, style: const TextStyle(color: AppColors.text, fontSize: 13))),
+                  const Text('• ', style: TextStyle(color: M3Colors.primary, fontSize: 13)),
+                  Expanded(child: Text(f, style: const TextStyle(color: M3Colors.onPrimaryContainer, fontSize: 13))),
                 ],
               ),
             ),
@@ -545,50 +551,39 @@ class _FaultCard extends StatelessWidget {
   }
 }
 
-// ── Charge / discharge switches ───────────────────────────────────────────────
-class _MosfetSwitchRow extends ConsumerStatefulWidget {
-  const _MosfetSwitchRow({required this.chargeOn, required this.dischargeOn});
-  final bool? chargeOn;
-  final bool? dischargeOn;
+// ── Charge / discharge toggle ─────────────────────────────────────────────────
+class _MosfetToggle extends ConsumerStatefulWidget {
+  const _MosfetToggle({required this.isCharge, required this.on});
+  final bool isCharge;
+  final bool? on;
 
   @override
-  ConsumerState<_MosfetSwitchRow> createState() => _MosfetSwitchRowState();
+  ConsumerState<_MosfetToggle> createState() => _MosfetToggleState();
 }
 
-class _MosfetSwitchRowState extends ConsumerState<_MosfetSwitchRow> {
-  /// Which MOSFET has a command in flight, if any. The dashboard keeps
-  /// showing the BMS's real reported state throughout — this only disables
-  /// the control so a second tap can't race the first.
-  bool _chargeBusy = false;
-  bool _dischargeBusy = false;
+class _MosfetToggleState extends ConsumerState<_MosfetToggle> {
+  /// The dashboard keeps showing the BMS's real reported state throughout —
+  /// this only disables the control so a second tap can't race the first.
+  bool _busy = false;
 
-  Future<void> _toggle({required bool isCharge, required bool currentlyOn}) async {
+  Future<void> _toggle() async {
+    final currentlyOn = widget.on;
+    if (currentlyOn == null || _busy) return;
     final turningOn = !currentlyOn;
-    final label = isCharge ? 'charge' : 'discharge';
+    final label = widget.isCharge ? 'charge' : 'discharge';
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(turningOn ? 'Turn $label MOSFET on?' : 'Turn $label MOSFET off?', style: const TextStyle(color: AppColors.text, fontSize: 17)),
-        content: Text(
-          turningOn
-              ? 'This re-enables ${isCharge ? "charging" : "the pack's output"}.'
-              : isCharge
-                  ? 'The pack will stop accepting charge. You can turn it back on from here.'
-                  : "The pack will stop supplying power immediately — anything running from it will cut out.\n\nThe BMS stays reachable over Bluetooth, so you can turn it back on from here.",
-          style: const TextStyle(color: AppColors.textSec, height: 1.5),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel', style: TextStyle(color: AppColors.textSec))),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text(
-              turningOn ? 'Turn on' : 'Turn off',
-              style: TextStyle(color: turningOn ? AppColors.success : AppColors.danger, fontWeight: FontWeight.w700),
-            ),
-          ),
-        ],
-      ),
+    final confirmed = await showM3Dialog(
+      context,
+      icon: widget.isCharge ? Icons.power : Icons.bolt,
+      destructive: !turningOn,
+      title: turningOn ? 'Turn $label MOSFET on?' : 'Turn $label MOSFET off?',
+      message: turningOn
+          ? 'This re-enables ${widget.isCharge ? "charging" : "the pack's output"}.'
+          : widget.isCharge
+              ? 'The pack will stop accepting charge. You can turn it back on from here.'
+              : "The pack will stop supplying power immediately — anything running from it will cut out.\n\nThe BMS stays reachable over Bluetooth, so you can turn it back on from here.",
+      cancelLabel: 'Cancel',
+      okLabel: turningOn ? 'Turn on' : 'Turn off',
     );
 
     if (confirmed != true || !mounted) return;
@@ -596,12 +591,10 @@ class _MosfetSwitchRowState extends ConsumerState<_MosfetSwitchRow> {
     final service = ref.read(bmsBleServiceProvider);
     if (service == null) return;
 
-    setState(() => isCharge ? _chargeBusy = true : _dischargeBusy = true);
-
-    final ok = isCharge ? await service.setChargeMos(on: turningOn) : await service.setDischargeMos(on: turningOn);
-
+    setState(() => _busy = true);
+    final ok = widget.isCharge ? await service.setChargeMos(on: turningOn) : await service.setDischargeMos(on: turningOn);
     if (!mounted) return;
-    setState(() => isCharge ? _chargeBusy = false : _dischargeBusy = false);
+    setState(() => _busy = false);
 
     if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not send the $label MOSFET command.')));
@@ -614,59 +607,15 @@ class _MosfetSwitchRowState extends ConsumerState<_MosfetSwitchRow> {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Row(
-          children: [
-            _MosLabel(label: 'Charging', on: widget.chargeOn, busy: _chargeBusy, activeColor: AppColors.success),
-            const SizedBox(width: 10),
-            PillSwitch(
-              on: widget.chargeOn ?? false,
-              activeColor: AppColors.success,
-              onChanged: (widget.chargeOn == null || _chargeBusy)
-                  ? null
-                  : (_) => _toggle(isCharge: true, currentlyOn: widget.chargeOn!),
-            ),
-          ],
-        ),
-        Row(
-          children: [
-            _MosLabel(label: 'Discharge', on: widget.dischargeOn, busy: _dischargeBusy, activeColor: AppColors.primary),
-            const SizedBox(width: 10),
-            PillSwitch(
-              on: widget.dischargeOn ?? false,
-              activeColor: AppColors.primary,
-              onChanged: (widget.dischargeOn == null || _dischargeBusy)
-                  ? null
-                  : (_) => _toggle(isCharge: false, currentlyOn: widget.dischargeOn!),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _MosLabel extends StatelessWidget {
-  const _MosLabel({required this.label, required this.on, required this.busy, required this.activeColor});
-  final String label;
-  final bool? on;
-  final bool busy;
-  final Color activeColor;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.text)),
-        Text(
-          busy ? 'Sending…' : (on == null ? '—' : (on! ? 'On' : 'Off')),
-          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: on == true ? activeColor : AppColors.textSec),
-        ),
-      ],
+    final label = widget.isCharge ? 'Charging' : 'Discharge';
+    final stateText = widget.on == null ? '' : (widget.on! ? ' · On' : ' · Off');
+    final activeColor = widget.isCharge ? M3Colors.success : M3Colors.primary;
+    return M3TonalButton(
+      label: _busy ? 'Sending…' : '$label$stateText',
+      icon: widget.isCharge ? Icons.power : Icons.bolt,
+      active: widget.on ?? false,
+      activeColor: activeColor,
+      onTap: _busy ? () {} : _toggle,
     );
   }
 }
@@ -685,8 +634,9 @@ class _CellVoltageCard extends StatelessWidget {
     final maxV = voltages.reduce((a, b) => a > b ? a : b);
     final deltaV = maxV - minV;
 
-    return GlassCard(
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 8),
+    return Container(
+      decoration: BoxDecoration(color: M3Colors.surfaceContainerLow, borderRadius: BorderRadius.circular(M3Radii.card)),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -697,30 +647,43 @@ class _CellVoltageCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Cell voltages', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.text)),
-                    const SizedBox(height: 2),
+                    const Text('CELL VOLTAGES', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: M3Colors.onSurfaceVariant, letterSpacing: 0.3)),
+                    const SizedBox(height: 4),
                     Text(
                       'Δ ${(deltaV * 1000).toStringAsFixed(0)} mV · ${minV.toStringAsFixed(2)}–${maxV.toStringAsFixed(2)} V',
-                      style: const TextStyle(fontSize: 12, color: AppColors.textSec),
+                      style: const TextStyle(fontSize: 12, color: M3Colors.onSurfaceVariant),
                     ),
                   ],
                 ),
               ),
-              BalanceBadge(deltaVolts: deltaV),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 10),
           Column(
             children: voltages.asMap().entries.map((entry) {
               final i = entry.key;
-              return Container(
-                decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.trackBg))),
-                child: CellRow(
-                  index: i + 1,
-                  voltage: entry.value,
-                  min: minV,
-                  max: maxV,
-                  isBalancing: balancingCells.contains(i + 1),
+              final v = entry.value;
+              final isLast = i == voltages.length - 1;
+              final pct = maxV - minV < 0.001 ? 1.0 : (v - minV) / (maxV - minV);
+              final balancing = balancingCells.contains(i + 1);
+              return M3ListItem(
+                icon: Icons.bolt,
+                iconColor: balancing ? M3Colors.tertiary : M3Colors.primary,
+                iconBg: balancing ? M3Colors.tertiaryContainer : M3Colors.primaryContainer,
+                headline: 'Cell ${i + 1}',
+                supporting: balancing ? '${v.toStringAsFixed(2)} V · Balancing' : '${v.toStringAsFixed(2)} V',
+                last: isLast,
+                trailing: SizedBox(
+                  width: 84,
+                  height: 6,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      value: 0.1 + pct * 0.9,
+                      backgroundColor: M3Colors.surfaceContainerHighest,
+                      color: M3Colors.primary,
+                    ),
+                  ),
                 ),
               );
             }).toList(),

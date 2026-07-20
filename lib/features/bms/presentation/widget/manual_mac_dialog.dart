@@ -1,7 +1,10 @@
 // lib/features/bms/presentation/widgets/manual_mac_dialog.dart
 //
 // Dialog for entering a BMS MAC address manually, then running the
-// scan-filter-connect flow (same path as QR scan).
+// scan-filter-connect flow (same path as QR scan). Chrome restyled to match
+// M3Dialog (28dp radius, surfaceContainerHigh, icon in a tonal circle) —
+// kept as its own Dialog rather than reusing M3Dialog directly since this
+// one has a form + live status, not a fixed message.
 
 import 'dart:async';
 
@@ -11,13 +14,11 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/ble/ble_service.dart';
-import '../../../../core/theme/app_theme.dart';
+import '../../../../core/theme/m3_theme.dart';
 import '../providers/bms_provider.dart';
-import '../screens/bms_dashboard.dart';
 
 /// Shows the manual-MAC dialog. Returns true if the user successfully
-/// connected and the dashboard was navigated to (so callers can pop
-/// themselves), false otherwise.
+/// connected (so callers can pop themselves), false otherwise.
 Future<bool> showManualMacDialog(BuildContext context, WidgetRef ref) async {
   final result = await showDialog<bool>(
     context: context,
@@ -191,11 +192,10 @@ class _ManualMacDialogState extends ConsumerState<_ManualMacDialog> {
 
     if (!mounted) return;
 
-    // Close dialog, then navigate to dashboard.
+    // Close dialog, then switch to the Home tab — bleDeviceProvider changing
+    // already makes it reactively show the connected dashboard.
     Navigator.of(context).pop(true);
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const BmsDashboard()),
-    );
+    ref.read(shellTabIndexProvider.notifier).state = 0;
   }
 
   void _showError(String message) {
@@ -211,8 +211,8 @@ class _ManualMacDialogState extends ConsumerState<_ManualMacDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: AppColors.card,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      backgroundColor: M3Colors.surfaceContainerHigh,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(M3Radii.dialog)),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
         child: Form(
@@ -221,22 +221,18 @@ class _ManualMacDialogState extends ConsumerState<_ManualMacDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(color: AppColors.primarySoft, borderRadius: BorderRadius.circular(10)),
-                    child: const Icon(Icons.keyboard, color: AppColors.primary, size: 20),
-                  ),
-                  const SizedBox(width: 12),
-                  const Text('Enter MAC Address', style: TextStyle(color: AppColors.text, fontSize: 17, fontWeight: FontWeight.w700)),
-                ],
+              Container(
+                width: 40,
+                height: 40,
+                decoration: const BoxDecoration(color: M3Colors.secondaryContainer, shape: BoxShape.circle),
+                child: const Icon(Icons.keyboard, color: M3Colors.onSecondaryContainer, size: 20),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 14),
+              const Text('Enter MAC Address', style: TextStyle(color: M3Colors.onSurface, fontSize: 22, fontWeight: FontWeight.w400)),
+              const SizedBox(height: 10),
               const Text(
                 'Find the MAC address printed on the label of your BMS (usually 12 hex characters).',
-                style: TextStyle(color: AppColors.textSec, fontSize: 13, height: 1.45),
+                style: TextStyle(color: M3Colors.onSurfaceVariant, fontSize: 13, height: 1.45),
               ),
               const SizedBox(height: 16),
               TextFormField(
@@ -244,20 +240,20 @@ class _ManualMacDialogState extends ConsumerState<_ManualMacDialog> {
                 enabled: !_connecting,
                 autofocus: true,
                 textCapitalization: TextCapitalization.characters,
-                style: const TextStyle(color: AppColors.text, fontSize: 16, fontFamily: 'monospace', letterSpacing: 1.5),
+                style: const TextStyle(color: M3Colors.onSurface, fontSize: 16, fontFamily: 'monospace', letterSpacing: 1.5),
                 inputFormatters: [_MacInputFormatter()],
                 decoration: InputDecoration(
                   hintText: 'AA:BB:CC:DD:EE:FF',
-                  hintStyle: TextStyle(color: AppColors.textSec.withValues(alpha: 0.5), fontFamily: 'monospace', letterSpacing: 1.5),
+                  hintStyle: TextStyle(color: M3Colors.onSurfaceVariant.withValues(alpha: 0.5), fontFamily: 'monospace', letterSpacing: 1.5),
                   filled: true,
-                  fillColor: AppColors.bg,
+                  fillColor: M3Colors.surfaceContainerHigh,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.border)),
-                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.border)),
-                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.primary)),
-                  errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.danger)),
-                  focusedErrorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.danger)),
-                  errorStyle: const TextStyle(color: AppColors.danger),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: M3Colors.outlineVariant)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: M3Colors.outlineVariant)),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: M3Colors.primary, width: 2)),
+                  errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: M3Colors.primary)),
+                  focusedErrorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: M3Colors.primary, width: 2)),
+                  errorStyle: const TextStyle(color: M3Colors.primary),
                 ),
                 validator: _validate,
               ),
@@ -271,19 +267,19 @@ class _ManualMacDialogState extends ConsumerState<_ManualMacDialog> {
                 children: [
                   TextButton(
                     onPressed: _connecting ? null : () => Navigator.of(context).pop(false),
-                    child: const Text('Cancel', style: TextStyle(color: AppColors.textSec)),
+                    child: const Text('Cancel', style: TextStyle(color: M3Colors.onSurfaceVariant, fontWeight: FontWeight.w600)),
                   ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(
+                  const SizedBox(width: 4),
+                  FilledButton(
                     onPressed: _connecting ? null : _onConnect,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: M3Colors.primary,
                       foregroundColor: Colors.white,
-                      disabledBackgroundColor: AppColors.border,
-                      disabledForegroundColor: AppColors.textSec,
+                      disabledBackgroundColor: M3Colors.surfaceContainerHighest,
+                      disabledForegroundColor: M3Colors.onSurfaceVariant,
                       elevation: 0,
                       padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                       textStyle: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                     child: _connecting
@@ -301,14 +297,13 @@ class _ManualMacDialogState extends ConsumerState<_ManualMacDialog> {
 
   Widget _buildStatusRow() {
     final isError = _errorMessage != null;
-    final color = isError ? AppColors.danger : AppColors.primary;
+    final color = isError ? M3Colors.primary : M3Colors.primary;
 
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
+        color: isError ? M3Colors.primaryContainer : M3Colors.secondaryContainer,
+        borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -316,10 +311,13 @@ class _ManualMacDialogState extends ConsumerState<_ManualMacDialog> {
           if (isError)
             Icon(Icons.error_outline, color: color, size: 18)
           else
-            SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: color)),
+            const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: M3Colors.secondary)),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(_errorMessage ?? _statusMessage ?? '', style: const TextStyle(color: AppColors.text, fontSize: 12.5, height: 1.45)),
+            child: Text(
+              _errorMessage ?? _statusMessage ?? '',
+              style: TextStyle(color: isError ? M3Colors.onPrimaryContainer : M3Colors.onSecondaryContainer, fontSize: 12.5, height: 1.45),
+            ),
           ),
         ],
       ),
