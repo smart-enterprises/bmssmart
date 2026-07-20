@@ -591,6 +591,29 @@ void main() {
     });
   });
 
+  group('estimateTimeToFullHours', () {
+    test('divides the gap to full by the charge current', () {
+      // 10 Ah still needed at 5 A -> 2 hours.
+      final h = estimateTimeToFullHours(remainingAh: 40.0, nominalAh: 50.0, chargeAmps: 5.0);
+      expect(h, closeTo(2.0, 0.001));
+    });
+
+    test('returns 0 when already at or effectively at full', () {
+      expect(estimateTimeToFullHours(remainingAh: 50.0, nominalAh: 50.0, chargeAmps: 2.0), equals(0));
+      // Within the 0.05 Ah near-full tolerance.
+      expect(estimateTimeToFullHours(remainingAh: 49.98, nominalAh: 50.0, chargeAmps: 2.0), equals(0));
+    });
+
+    test('clamps an overshoot (remaining slightly above nominal) to 0, not negative', () {
+      expect(estimateTimeToFullHours(remainingAh: 50.5, nominalAh: 50.0, chargeAmps: 2.0), equals(0));
+    });
+
+    test('returns null when charge current is negligible', () {
+      expect(estimateTimeToFullHours(remainingAh: 10.0, nominalAh: 50.0, chargeAmps: 0.0), isNull);
+      expect(estimateTimeToFullHours(remainingAh: 10.0, nominalAh: 50.0, chargeAmps: 0.02), isNull);
+    });
+  });
+
   group('formatDuration', () {
     test('formats sub-hour durations as minutes only', () {
       expect(formatDuration(0.5), equals('30m'));

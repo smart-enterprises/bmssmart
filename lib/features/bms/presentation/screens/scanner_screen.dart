@@ -653,14 +653,14 @@ class _IconActionButton extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: const Color(0x99FFFFFF),
+        color: AppColors.chipBg,
         borderRadius: BorderRadius.circular(10),
         child: InkWell(
           onTap: onPressed,
           borderRadius: BorderRadius.circular(10),
           child: Container(
             padding: const EdgeInsets.all(11),
-            decoration: BoxDecoration(border: Border.all(color: const Color(0xB3FFFFFF)), borderRadius: BorderRadius.circular(10)),
+            decoration: BoxDecoration(border: Border.all(color: AppColors.chipBorder), borderRadius: BorderRadius.circular(10)),
             child: Icon(icon, color: AppColors.primary, size: 18),
           ),
         ),
@@ -686,9 +686,9 @@ class _GlassIconButton extends StatelessWidget {
         height: 38,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: const Color(0x99FFFFFF),
+          color: AppColors.chipBg,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xB3FFFFFF)),
+          border: Border.all(color: AppColors.chipBorder),
         ),
         child: Icon(icon, color: AppColors.textSec, size: 18),
       ),

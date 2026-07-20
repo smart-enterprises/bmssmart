@@ -141,9 +141,9 @@ class _MoreButton extends StatelessWidget {
         height: 38,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: const Color(0x99FFFFFF),
+          color: AppColors.chipBg,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xB3FFFFFF)),
+          border: Border.all(color: AppColors.chipBorder),
         ),
         child: const Icon(Icons.more_horiz, color: AppColors.textSec, size: 18),
       ),
@@ -294,11 +294,23 @@ class _ConnectedBody extends StatelessWidget {
     final runtimeHours = (isDischarging && snapshot.remainingAh != null && current != null)
         ? estimateRuntimeHours(remainingAh: snapshot.remainingAh!, loadAmps: current.abs())
         : null;
-    final runtimeSublabel = (isDischarging && current != null)
-        ? 'at ${current.abs().toStringAsFixed(1)} A load'
-        : isCharging
-            ? 'plugged in'
-            : 'no load';
+
+    final timeToFullHours = (isCharging && snapshot.remainingAh != null && snapshot.nominalAh != null && current != null)
+        ? estimateTimeToFullHours(remainingAh: snapshot.remainingAh!, nominalAh: snapshot.nominalAh!, chargeAmps: current)
+        : null;
+
+    final String runtimeValue;
+    final String runtimeSublabel;
+    if (isDischarging) {
+      runtimeValue = formatDuration(runtimeHours);
+      runtimeSublabel = current != null ? 'at ${current.abs().toStringAsFixed(1)} A load' : 'no load';
+    } else if (isCharging) {
+      runtimeValue = timeToFullHours == 0 ? 'Full' : formatDuration(timeToFullHours);
+      runtimeSublabel = current != null ? 'to full at ${current.toStringAsFixed(1)} A' : 'plugged in';
+    } else {
+      runtimeValue = '—';
+      runtimeSublabel = 'no load';
+    }
 
     return SingleChildScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -353,7 +365,7 @@ class _ConnectedBody extends StatelessWidget {
               Expanded(
                 child: StatTile(
                   label: 'Runtime',
-                  value: isDischarging ? formatDuration(runtimeHours) : '—',
+                  value: runtimeValue,
                   sublabel: runtimeSublabel,
                   icon: Icons.access_time,
                 ),

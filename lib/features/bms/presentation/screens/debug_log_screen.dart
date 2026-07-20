@@ -105,7 +105,7 @@ class _DebugLogScreenState extends State<DebugLogScreen> {
           const SizedBox(width: 10),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            decoration: BoxDecoration(color: const Color(0x99FFFFFF), borderRadius: BorderRadius.circular(10)),
+            decoration: BoxDecoration(color: AppColors.chipBg, borderRadius: BorderRadius.circular(10)),
             child: Text('${_entries.length}', style: const TextStyle(color: AppColors.textSec, fontSize: 12)),
           ),
           const Spacer(),

@@ -29,9 +29,6 @@ class PillSwitch extends StatelessWidget {
         decoration: BoxDecoration(
           color: on ? activeColor : const Color(0x66949EAE),
           borderRadius: BorderRadius.circular(999),
-          boxShadow: on
-              ? [BoxShadow(color: activeColor.withValues(alpha: 0.53), blurRadius: 8, offset: const Offset(0, 2))]
-              : null,
         ),
         child: Container(
           width: 24,

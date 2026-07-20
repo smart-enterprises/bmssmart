@@ -52,9 +52,9 @@ class StatTile extends StatelessWidget {
                   height: 26,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: const Color(0x99FFFFFF),
+                    color: AppColors.chipBg,
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xB3FFFFFF)),
+                    border: Border.all(color: AppColors.chipBorder),
                   ),
                   child: Icon(icon, size: 14, color: iconColor ?? AppColors.textSec),
                 ),

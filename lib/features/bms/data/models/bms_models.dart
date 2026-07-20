@@ -25,6 +25,25 @@ double? estimateRuntimeHours({required double remainingAh, required double loadA
   return remainingAh / loadAmps;
 }
 
+/// Hours until the pack reaches full charge at the present charge rate, or
+/// null when there's no meaningful estimate (no capacity data, or the charge
+/// current is too small to be a real projection). Returns 0 once the
+/// remaining gap to full is negligible, rather than a tiny/noisy duration.
+///
+/// Like [estimateRuntimeHours], this is a simple linear projection: it
+/// assumes the present current holds steady. It reads increasingly optimistic
+/// once the pack enters the CV taper near 100%, where charge current tapers
+/// off well before the linear estimate would predict completion.
+double? estimateTimeToFullHours({
+  required double remainingAh,
+  required double nominalAh,
+  required double chargeAmps,
+}) {
+  final capacityToFillAh = (nominalAh - remainingAh).clamp(0.0, nominalAh);
+  if (capacityToFillAh <= 0.05) return 0;
+  return estimateRuntimeHours(remainingAh: capacityToFillAh, loadAmps: chargeAmps);
+}
+
 /// Formats hours as "Xh Ym" ("Ym" alone under an hour, rounded to the minute).
 String formatDuration(double? hours) {
   if (hours == null || !hours.isFinite || hours < 0) return '—';
