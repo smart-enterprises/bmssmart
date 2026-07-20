@@ -37,6 +37,9 @@ dependencies:
   flutter_blue_plus: ^2.2.1
   flutter_riverpod: ^3.3.1
   permission_handler: ^12.0.1
+  mobile_scanner: ^5.2.3
+  image_picker: ^1.1.2
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
@@ -60,6 +63,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/branding/warrior_logo.png
+    - assets/branding/warrior_loading.gif
 
   # To add assets to your application, add an assets section, like this:
   # assets:
