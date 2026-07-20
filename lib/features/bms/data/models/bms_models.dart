@@ -348,6 +348,78 @@ class HistoryPoint {
   });
 }
 
+// ── JBD frames ────────────────────────────────────────────────────────────
+//
+// JBD (Jiabaida — commonly rebranded as Overkill Solar, EBM, and others)
+// speaks a different protocol from Daly, carried over a different BLE
+// service (ff00 vs Daly's fff0). Frames are DD...77-bounded and
+// variable-length, unlike Daly's fixed 13 bytes. See jbd_parser.dart for the
+// frame format and an important caveat: these offsets are inherited from an
+// earlier version of this app and have not yet been re-verified against a
+// real device in this project.
+
+sealed class JbdFrame {
+  final DateTime timestamp;
+  const JbdFrame({required this.timestamp});
+}
+
+/// 0x03 — main pack data: voltage, current, capacity, cycles, SOC, MOSFET
+/// state, and NTC temperatures, all in one frame (unlike Daly, which splits
+/// these across several commands).
+final class JbdMainFrame extends JbdFrame {
+  final double packVoltage;
+  final double currentAmps;
+  final double remainingAh;
+  final double nominalAh;
+  final int cycleCount;
+  final int protectionStateBits;
+  final double soc;
+  final int mosfetState;
+  final int cellCount;
+
+  /// NTC sensor temperatures in °C, in sensor order.
+  final List<double> ntcTempsC;
+
+  const JbdMainFrame({
+    required this.packVoltage,
+    required this.currentAmps,
+    required this.remainingAh,
+    required this.nominalAh,
+    required this.cycleCount,
+    required this.protectionStateBits,
+    required this.soc,
+    required this.mosfetState,
+    required this.cellCount,
+    required this.ntcTempsC,
+    required super.timestamp,
+  });
+
+  // Reversed from the commonly published convention (bit0=charge,
+  // bit1=discharge) — verified 2026-07-20 by replaying a captured HCI snoop
+  // log of a single official-app "Discharge off" action and cross-checking
+  // the resulting raw mosfetState against what the official app's own
+  // screen showed afterward (Charge: on, Discharge: off), not just a
+  // checksum match. Mirrors the reversed Daly MOSFET opcodes elsewhere in
+  // this project — treat every "documented" JBD polarity as unverified
+  // until checked against this hardware.
+  bool get dischargeMosOn => (mosfetState & 0x01) != 0;
+  bool get chargeMosOn => (mosfetState & 0x02) != 0;
+
+  @override
+  String toString() => 'JbdMainFrame(${packVoltage}V, ${currentAmps}A, $soc%, '
+      '$cellCount cells, chg=$chargeMosOn dsg=$dischargeMosOn)';
+}
+
+/// 0x04 — every cell voltage in a single frame (unlike Daly's 0x95, which
+/// pages 3 cells per sub-frame).
+final class JbdCellVoltageFrame extends JbdFrame {
+  final List<double> voltages;
+  const JbdCellVoltageFrame({required this.voltages, required super.timestamp});
+
+  @override
+  String toString() => 'JbdCellVoltageFrame(${voltages.length} cells: $voltages)';
+}
+
 // ── BmsSnapshot ────────────────────────────────────────────────────────────
 
 /// Merged view of every Daly response received so far.
@@ -555,6 +627,35 @@ class BmsSnapshot {
       // An ack is not evidence of a state change — let the next 0x93 report
       // what actually happened rather than showing an optimistic lie.
       DalyMosAckFrame() => this,
+    };
+  }
+
+  /// Folds a freshly parsed JBD [frame] into this snapshot. JBD's 0x03 sends
+  /// everything but cell voltages in one shot, and 0x04 sends every cell
+  /// voltage in one shot too — no positional merging needed, unlike Daly's
+  /// paged cell frames.
+  BmsSnapshot mergeJbd(JbdFrame frame) {
+    return switch (frame) {
+      JbdMainFrame f => copyWith(
+          packVoltage: f.packVoltage,
+          currentAmps: f.currentAmps,
+          soc: f.soc,
+          remainingAh: f.remainingAh,
+          nominalAh: f.nominalAh,
+          cycleCount: f.cycleCount,
+          cellCount: f.cellCount,
+          chargeMosOn: f.chargeMosOn,
+          dischargeMosOn: f.dischargeMosOn,
+          tempSensorCount: f.ntcTempsC.length,
+          cellTemps: f.ntcTempsC.map((t) => t.round()).toList(),
+          maxTempC: f.ntcTempsC.isEmpty ? null : f.ntcTempsC.reduce((a, b) => a > b ? a : b).round(),
+          minTempC: f.ntcTempsC.isEmpty ? null : f.ntcTempsC.reduce((a, b) => a < b ? a : b).round(),
+          updatedAt: f.timestamp,
+        ),
+      JbdCellVoltageFrame f => copyWith(
+          cellVoltages: f.voltages,
+          updatedAt: f.timestamp,
+        ),
     };
   }
 

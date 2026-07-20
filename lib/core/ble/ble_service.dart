@@ -1,6 +1,12 @@
 // lib/core/ble/ble_service.dart
 //
-// Manages the full BLE connection lifecycle for a Daly BMS device.
+// Manages the full BLE connection lifecycle for a BMS device. Speaks two
+// protocols — Daly and JBD — auto-detected from the GATT services the device
+// actually advertises after connecting (fff0 -> Daly, ff00 -> JBD). All the
+// connection lifecycle, replay streams, and history tracking below is shared;
+// only characteristic matching, poll commands, frame extraction, and parsing
+// branch by protocol.
+//
 // No Riverpod imports. Consumed by bms_provider.dart.
 
 import 'dart:async';
@@ -9,6 +15,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../../features/bms/data/models/bms_models.dart';
 import '../../features/bms/data/parser/bms_parser.dart';
+import '../../features/bms/data/parser/jbd_parser.dart';
 import '../diagnostics/app_logger.dart';
 import 'replay_stream.dart';
 
@@ -19,7 +26,12 @@ const String kDalyServiceUuid = '0000fff0-0000-1000-8000-00805f9b34fb';
 const String kDalyNotifyUuid = '0000fff1-0000-1000-8000-00805f9b34fb';
 const String kDalyWriteUuid = '0000fff2-0000-1000-8000-00805f9b34fb';
 
-// ── Host addresses ──────────────────────────────────────────────────────────
+// ── JBD BLE UUIDs ────────────────────────────────────────────────────────────
+const String kJbdServiceUuid = '0000ff00-0000-1000-8000-00805f9b34fb';
+const String kJbdNotifyUuid = '0000ff01-0000-1000-8000-00805f9b34fb';
+const String kJbdWriteUuid = '0000ff02-0000-1000-8000-00805f9b34fb';
+
+// ── Host addresses (Daly only — JBD's request frame has no address byte) ────
 /// Host address used by the Bluetooth module.
 const int kHostAddrBluetooth = 0x80;
 
@@ -45,6 +57,16 @@ const List<int> kOneShotCommands = [
   BmsParser.cmdRated, // 0x50 — rated capacity
 ];
 
+/// JBD commands polled every cycle. Unlike Daly, one 0x03 request returns
+/// everything but cell voltages in a single frame.
+const List<int> kJbdPollCommands = [
+  JbdParser.cmdMain, // 0x03 — voltage / current / SOC / capacity / MOS / temps
+  JbdParser.cmdCellVoltages, // 0x04 — every cell voltage in one frame
+];
+
+// ── Protocol ─────────────────────────────────────────────────────────────────
+enum BmsProtocol { daly, jbd }
+
 // ── Connection state ─────────────────────────────────────────────────────────
 enum BleConnectionState { connecting, connected, disconnected, error }
 
@@ -62,6 +84,11 @@ class BmsBleService {
 
   BluetoothCharacteristic? _writeChar;
   BluetoothCharacteristic? _notifyChar;
+
+  /// Which protocol the connected device speaks. Null until GATT service
+  /// discovery has run — see [_discoverCharacteristics].
+  BmsProtocol? _protocol;
+  BmsProtocol? get protocol => _protocol;
 
   final StreamController<BmsSnapshot> _snapshotCtrl =
       StreamController<BmsSnapshot>.broadcast();
@@ -89,12 +116,27 @@ class BmsBleService {
   StreamSubscription<BluetoothConnectionState>? _connStateSub;
   Timer? _pollTimer;
 
+  /// Serializes every GATT write on [_writeChar] — the poll loop's timer and
+  /// a user-triggered control write are otherwise independent call sites
+  /// that can fire close together, and flutter_blue_plus does not queue
+  /// concurrent writes to the same characteristic on its own. An overlapping
+  /// write can be silently mangled on the wire even though both local calls
+  /// report success and the BMS still acks something. Chain every write
+  /// through this so only one is ever in flight.
+  Future<void> _writeQueue = Future.value();
+
+  Future<void> _serializedWrite(Uint8List frame, {required bool withoutResponse}) {
+    final result = _writeQueue.then((_) => _writeChar!.write(frame, withoutResponse: withoutResponse));
+    _writeQueue = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
   bool _connected = false;
   bool _disposed = false;
 
-  /// Host address currently being used for requests. Starts at the Bluetooth
-  /// address and falls back to the UART one if the BMS stays silent — see
-  /// [_maybeFallbackHostAddress].
+  /// Host address currently being used for requests. Daly only — starts at
+  /// the Bluetooth address and falls back to the UART one if the BMS stays
+  /// silent — see [_maybeFallbackHostAddress].
   int _hostAddr = kHostAddrBluetooth;
 
   /// Number of consecutive poll cycles that produced no valid frame.
@@ -128,7 +170,7 @@ class BmsBleService {
   /// Latest snapshot, for callers that want a value rather than a stream.
   BmsSnapshot get currentSnapshot => _current;
 
-  /// Host address in use — surfaced for the debug screen.
+  /// Host address in use — surfaced for the debug screen. Daly only.
   int get hostAddress => _hostAddr;
 
   Future<void> connect() async {
@@ -186,7 +228,7 @@ class BmsBleService {
       if (!_connectCompleter.isCompleted) {
         _connectCompleter.complete(okStatus);
       }
-      AppLogger.instance.ok('ble', '✓ Connection complete');
+      AppLogger.instance.ok('ble', '✓ Connection complete (protocol: $_protocol)');
     } catch (e) {
       AppLogger.instance.e('ble', '✗ Connect failed: $e');
       final errStatus = BleStatus(
@@ -244,6 +286,17 @@ class BmsBleService {
       final svcUuid = svc.uuid.toString().toLowerCase();
       AppLogger.instance
           .d('ble', '  service: $svcUuid (${svc.characteristics.length} chars)');
+
+      if (_protocol == null) {
+        if (_uuidMatches(svcUuid, kDalyServiceUuid)) {
+          _protocol = BmsProtocol.daly;
+          AppLogger.instance.ok('ble', '  detected protocol: Daly (service fff0)');
+        } else if (_uuidMatches(svcUuid, kJbdServiceUuid)) {
+          _protocol = BmsProtocol.jbd;
+          AppLogger.instance.ok('ble', '  detected protocol: JBD (service ff00)');
+        }
+      }
+
       for (final char in svc.characteristics) {
         final uuid = char.uuid.toString().toLowerCase();
         final props = <String>[];
@@ -254,22 +307,35 @@ class BmsBleService {
         if (char.properties.indicate) props.add('indicate');
         AppLogger.instance.d('ble', '    char: $uuid [${props.join(",")}]');
 
-        if (!_uuidMatches(svcUuid, kDalyServiceUuid)) continue;
-        if (_uuidMatches(uuid, kDalyNotifyUuid)) {
+        final isDalyChar = _uuidMatches(svcUuid, kDalyServiceUuid);
+        final isJbdChar = _uuidMatches(svcUuid, kJbdServiceUuid);
+        if (!isDalyChar && !isJbdChar) continue;
+
+        final notifyUuid = isDalyChar ? kDalyNotifyUuid : kJbdNotifyUuid;
+        final writeUuid = isDalyChar ? kDalyWriteUuid : kJbdWriteUuid;
+        final label = isDalyChar ? 'Daly' : 'JBD';
+
+        if (_uuidMatches(uuid, notifyUuid)) {
           _notifyChar = char;
-          AppLogger.instance.ok('ble', '  matched Daly notify char (FFF1)');
+          AppLogger.instance.ok('ble', '  matched $label notify char');
         }
-        if (_uuidMatches(uuid, kDalyWriteUuid)) {
+        if (_uuidMatches(uuid, writeUuid)) {
           _writeChar = char;
-          AppLogger.instance.ok('ble', '  matched Daly write char (FFF2)');
+          AppLogger.instance.ok('ble', '  matched $label write char');
         }
       }
     }
 
-    // Fallback: try matching by properties if UUIDs differ slightly
+    // Fallback: try matching by properties if UUIDs differ slightly. This
+    // also covers the case where the protocol itself wasn't recognized from
+    // the service UUID (e.g. an unlisted clone) — the device may still work
+    // if characteristics can be matched generically. Default the protocol to
+    // Daly in that case, since that's this app's original/primary target and
+    // preserves existing behavior for anyone connecting to an unrecognized
+    // device today.
     if (_notifyChar == null || _writeChar == null) {
       AppLogger.instance
-          .w('ble', 'Daly UUIDs not found, falling back to property matching');
+          .w('ble', 'Known UUIDs not found, falling back to property matching');
       for (final svc in services) {
         for (final char in svc.characteristics) {
           if (_notifyChar == null && char.properties.notify) {
@@ -285,13 +351,19 @@ class BmsBleService {
       }
     }
 
+    if (_protocol == null) {
+      AppLogger.instance.w('ble',
+          'Could not detect protocol from advertised services — defaulting to Daly');
+      _protocol = BmsProtocol.daly;
+    }
+
     if (_notifyChar == null || _writeChar == null) {
       AppLogger.instance.e('ble',
           'Required characteristics not found! notify=${_notifyChar != null}, write=${_writeChar != null}');
       throw StateError(
-        'Daly characteristics not found. '
+        'BMS characteristics not found. '
         'Notify: ${_notifyChar != null}, Write: ${_writeChar != null}. '
-        'Verify device exposes FFF1 (notify) and FFF2 (write).',
+        'Verify the device exposes a notify + write characteristic pair.',
       );
     }
   }
@@ -319,7 +391,9 @@ class BmsBleService {
   // Daly answers one command at a time and has no request pipelining, so the
   // commands are issued sequentially with a gap between them. 0x95 is the
   // expensive one: it replies with ceil(cells/3) separate frames, so it gets
-  // extra settle time before the cycle restarts.
+  // extra settle time before the cycle restarts. JBD is simpler — two
+  // commands, one frame each — but is polled with the same sequential
+  // discipline for consistency and because it's untested at this point.
   void _startPolling() {
     _pollOneShots();
     _poll();
@@ -327,9 +401,10 @@ class BmsBleService {
   }
 
   Future<void> _pollOneShots() async {
+    if (_protocol != BmsProtocol.daly) return;
     for (final cmd in kOneShotCommands) {
       if (!_canWrite) return;
-      await _send(cmd);
+      await _sendDaly(cmd);
       await Future<void>.delayed(const Duration(milliseconds: 120));
     }
   }
@@ -350,17 +425,25 @@ class BmsBleService {
 
     final framesAtStart = _validFrames;
     try {
-      for (final cmd in kPollCommands) {
-        if (_disposed || _writeChar == null) return;
-        await _send(cmd);
-        // 0x95 and 0x96 fan out into several reply frames; give them room.
-        final multiFrame = cmd == BmsParser.cmdCellVoltages ||
-            cmd == BmsParser.cmdCellTemps;
-        await Future<void>.delayed(
-          multiFrame
-              ? const Duration(milliseconds: 300)
-              : const Duration(milliseconds: 120),
-        );
+      if (_protocol == BmsProtocol.jbd) {
+        for (final cmd in kJbdPollCommands) {
+          if (_disposed || _writeChar == null) return;
+          await _sendJbd(cmd);
+          await Future<void>.delayed(const Duration(milliseconds: 150));
+        }
+      } else {
+        for (final cmd in kPollCommands) {
+          if (_disposed || _writeChar == null) return;
+          await _sendDaly(cmd);
+          // 0x95 and 0x96 fan out into several reply frames; give them room.
+          final multiFrame = cmd == BmsParser.cmdCellVoltages ||
+              cmd == BmsParser.cmdCellTemps;
+          await Future<void>.delayed(
+            multiFrame
+                ? const Duration(milliseconds: 300)
+                : const Duration(milliseconds: 120),
+          );
+        }
       }
     } catch (e) {
       AppLogger.instance.e('poll', 'Poll cycle error: $e');
@@ -397,32 +480,57 @@ class BmsBleService {
 
   // ── Control ──────────────────────────────────────────────────────────────
 
-  /// Switches the charge MOSFET on or off (0xD9).
-  Future<bool> setChargeMos({required bool on}) =>
-      _sendMosControl(BmsParser.cmdSetChargeMos, on: on);
+  /// Switches the charge MOSFET on or off (Daly: 0xDA write; JBD: 0xFB
+  /// toggle — see [_sendMosControl]).
+  Future<bool> setChargeMos({required bool on}) => _sendMosControl(isCharge: true, on: on);
 
-  /// Switches the discharge MOSFET on or off (0xDA).
+  /// Switches the discharge MOSFET on or off (Daly: 0xD9 write; JBD: 0xFB
+  /// toggle — see [_sendMosControl]).
   ///
   /// Turning this off cuts the pack's output to whatever it is powering. The
   /// BMS itself stays awake and reachable over BLE, so it can be switched back
   /// on from here.
-  Future<bool> setDischargeMos({required bool on}) =>
-      _sendMosControl(BmsParser.cmdSetDischargeMos, on: on);
+  Future<bool> setDischargeMos({required bool on}) => _sendMosControl(isCharge: false, on: on);
 
-  Future<bool> _sendMosControl(int cmd, {required bool on}) async {
+  Future<bool> _sendMosControl({required bool isCharge, required bool on}) async {
     if (!_canWrite) {
       AppLogger.instance.w('control', 'Not connected — command dropped');
       return false;
     }
 
-    final label = cmd == BmsParser.cmdSetChargeMos ? 'charge' : 'discharge';
-    final frame = BmsParser.buildMosControl(cmd, on: on, hostAddr: _hostAddr);
-    AppLogger.instance.i('control',
-        '→ $label MOS ${on ? "ON" : "OFF"} (0x${cmd.toRadixString(16)}): ${_hex(frame)}');
+    final label = isCharge ? 'charge' : 'discharge';
+
+    final Uint8List frame;
+    Uint8List? applyFrame;
+    if (_protocol == BmsProtocol.jbd) {
+      // 0xE1 sets BOTH MOSFETs' state in one write (verified against a
+      // captured official-app HCI log — see JbdParser.cmdSetMosState), so
+      // the switch that isn't being touched must have its current state
+      // re-sent alongside the one that is, or it would get clobbered.
+      final targetCharge = isCharge ? on : (_current.chargeMosOn ?? true);
+      final targetDischarge = isCharge ? (_current.dischargeMosOn ?? true) : on;
+      frame = JbdParser.buildMosState(chargeOn: targetCharge, dischargeOn: targetDischarge);
+      applyFrame = JbdParser.buildMosApply();
+    } else {
+      final cmd = isCharge ? BmsParser.cmdSetChargeMos : BmsParser.cmdSetDischargeMos;
+      frame = BmsParser.buildMosControl(cmd, on: on, hostAddr: _hostAddr);
+    }
+
+    AppLogger.instance.i('control', '→ $label MOS ${on ? "ON" : "OFF"}: ${_hex(frame)}');
 
     try {
-      await _writeChar!.write(frame, withoutResponse: true);
-      // The 0x93 poll reports the resulting state; nothing is assumed here.
+      await _serializedWrite(frame, withoutResponse: true);
+      if (applyFrame != null) {
+        // The captured official-app traffic always has the device ack the
+        // state write (~60ms) before the app sends the apply write. Sending
+        // both back-to-back with no gap meant the device sometimes never
+        // acked the state write at all — its firmware appears to need a
+        // beat between commands, same as the gap already used between poll
+        // commands below.
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+        await _serializedWrite(applyFrame, withoutResponse: true);
+      }
+      // The next poll reports the resulting state; nothing is assumed here.
       return true;
     } catch (e) {
       AppLogger.instance.e('control', '$label MOS write failed: $e');
@@ -430,18 +538,29 @@ class BmsBleService {
     }
   }
 
-  Future<void> _send(int cmd) async {
+  Future<void> _sendDaly(int cmd) async {
     final frame = BmsParser.buildRequest(cmd, hostAddr: _hostAddr);
     AppLogger.instance.d('poll',
         'TX cmd 0x${cmd.toRadixString(16)} (addr 0x${_hostAddr.toRadixString(16)}): ${_hex(frame)}');
+    await _writeFrame(frame);
+  }
+
+  Future<void> _sendJbd(int register) async {
+    final frame = JbdParser.buildRequest(register);
+    AppLogger.instance
+        .d('poll', 'TX reg 0x${register.toRadixString(16)}: ${_hex(frame)}');
+    await _writeFrame(frame);
+  }
+
+  Future<void> _writeFrame(Uint8List frame) async {
     try {
-      await _writeChar!.write(frame, withoutResponse: true);
+      await _serializedWrite(frame, withoutResponse: true);
     } catch (e) {
       // Some modules reject write-without-response; retry once with response.
       AppLogger.instance
           .w('poll', 'writeNoResp failed ($e), retrying with response');
       try {
-        await _writeChar!.write(frame, withoutResponse: false);
+        await _serializedWrite(frame, withoutResponse: false);
       } catch (e2) {
         AppLogger.instance.e('poll', 'Write error: $e2');
       }
@@ -452,8 +571,10 @@ class BmsBleService {
   /// 0x80, and the module variants are not consistent about which they pass
   /// through. Rather than make the user guess, try the other address after a
   /// few silent cycles. Once any valid frame has arrived the address is known
-  /// good and this stops trying.
+  /// good and this stops trying. Daly only — JBD's request frame has no host
+  /// address byte.
   void _maybeFallbackHostAddress() {
+    if (_protocol != BmsProtocol.daly) return;
     if (_validFrames > 0) return;
     if (_silentCycles < _kSilentCyclesBeforeFallback) return;
 
@@ -465,13 +586,14 @@ class BmsBleService {
 
   // ── Frame handling ───────────────────────────────────────────────────────
   //
-  // Daly frames are a fixed 13 bytes, but BLE notifications deliver MTU-sized
-  // chunks that do not respect frame boundaries: a reply can be split across
-  // two notifications, and a multi-frame 0x95 response usually arrives as
-  // several frames batched into one notification. So bytes are buffered and
-  // frames are extracted by scanning for a 0xA5 start byte and checking the
-  // trailing checksum. A byte that fails validation is dropped so the scan can
-  // resync on the next candidate — this recovers from mid-frame stack hiccups.
+  // BLE notifications deliver MTU-sized chunks that do not respect frame
+  // boundaries — a reply can be split across two notifications, and a
+  // multi-frame response usually arrives as several frames batched into one
+  // notification. So bytes are buffered and frames are extracted as they
+  // become available. Daly frames are a fixed 13 bytes; JBD frames are
+  // variable length (bounded by 0xDD...0x77, with a LEN byte at offset 3). A
+  // byte that fails validation is dropped so the scan can resync on the next
+  // candidate — this recovers from mid-frame stack hiccups.
 
   /// Rolling buffer of unparsed bytes.
   final List<int> _rxBuffer = [];
@@ -497,7 +619,9 @@ class BmsBleService {
     }
 
     var changed = false;
-    while (_tryExtractFrame()) {
+    final extractOne =
+        _protocol == BmsProtocol.jbd ? _tryExtractJbdFrame : _tryExtractDalyFrame;
+    while (extractOne()) {
       changed = true;
     }
 
@@ -506,8 +630,9 @@ class BmsBleService {
     }
   }
 
-  /// Extracts at most one frame. Returns true if the snapshot was updated.
-  bool _tryExtractFrame() {
+  /// Extracts at most one Daly frame (fixed 13 bytes). Returns true if the
+  /// snapshot was updated.
+  bool _tryExtractDalyFrame() {
     while (true) {
       final startIdx = _rxBuffer.indexOf(BmsParser.startByte);
       if (startIdx < 0) {
@@ -540,6 +665,63 @@ class BmsBleService {
 
       _validFrames++;
       _current = _current.merge(frame);
+      AppLogger.instance.ok('parse', frame.toString());
+      return true;
+    }
+  }
+
+  /// Extracts at most one JBD frame (variable length, DD...77). Returns true
+  /// if the snapshot was updated.
+  bool _tryExtractJbdFrame() {
+    while (true) {
+      final startIdx = _rxBuffer.indexOf(JbdParser.startByte);
+      if (startIdx < 0) {
+        _rxBuffer.clear();
+        return false;
+      }
+      if (startIdx > 0) {
+        _rxBuffer.removeRange(0, startIdx);
+      }
+      // Need at least start+cmd+status+len to know the full frame length.
+      if (_rxBuffer.length < 4) return false;
+
+      final len = _rxBuffer[3];
+      final expectedLen = 4 + len + 3;
+      if (expectedLen > _kMaxBufferSize) {
+        AppLogger.instance.w('rx', 'absurd JBD LEN=$len, dropping byte');
+        _rxBuffer.removeAt(0);
+        continue;
+      }
+      if (_rxBuffer.length < expectedLen) return false;
+
+      final candidate = Uint8List.fromList(_rxBuffer.sublist(0, expectedLen));
+
+      if (!JbdParser.isValidFrame(candidate)) {
+        // False start — drop the 0xDD and resync on the next one.
+        _rxBuffer.removeAt(0);
+        continue;
+      }
+
+      _rxBuffer.removeRange(0, expectedLen);
+
+      if (candidate[1] == JbdParser.cmdSetMosState || candidate[1] == JbdParser.cmdMosApply) {
+        // Ack for a MOS-state or apply write — carries no state, just
+        // confirms receipt. Not a frame JbdParser.parse understands (or
+        // needs to).
+        AppLogger.instance.d('parse', 'MOS write ack: ${_hex(candidate)}');
+        continue;
+      }
+
+      JbdFrame frame;
+      try {
+        frame = JbdParser.parse(candidate);
+      } on JbdParseException catch (e) {
+        AppLogger.instance.e('parse', '$e | raw: ${_hex(candidate)}');
+        return false;
+      }
+
+      _validFrames++;
+      _current = _current.mergeJbd(frame);
       AppLogger.instance.ok('parse', frame.toString());
       return true;
     }
