@@ -90,3 +90,19 @@ final lastDeviceNameProvider = FutureProvider<String?>((ref) async {
 /// outside HomeShell's own widget tree (manual-MAC dialog, connect flow,
 /// disconnect action) switch tabs without a Navigator call.
 final shellTabIndexProvider = StateProvider<int>((ref) => 0);
+
+/// The tab showing per-cell voltages.
+const kBatteryTabIndex = 1;
+
+/// Keeps the BLE service told whether per-cell voltages are actually on
+/// screen. The shell is an IndexedStack, so every tab stays mounted and the
+/// cell screen being *built* says nothing about it being visible — the tab
+/// index is the only honest signal. Reading cells nobody is looking at costs
+/// a request per cycle on a link that only has room for a few.
+///
+/// Watched for its side effect; it has no value of its own.
+final cellDetailVisibleProvider = Provider.autoDispose<void>((ref) {
+  final service = ref.watch(bmsBleServiceProvider);
+  service?.cellDetailVisible =
+      ref.watch(shellTabIndexProvider) == kBatteryTabIndex;
+});

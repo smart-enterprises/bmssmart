@@ -57,8 +57,10 @@ const List<int> kOneShotCommands = [
   BmsParser.cmdRated, // 0x50 — rated capacity
 ];
 
-/// JBD commands polled every cycle. Unlike Daly, one 0x03 request returns
-/// everything but cell voltages in a single frame.
+/// Every JBD command the poll loop knows about. Unlike Daly, one 0x03 request
+/// returns everything but cell voltages in a single frame — which is why these
+/// are not all issued every cycle. What actually goes out on a given cycle is
+/// decided by [BmsBleService._jbdCycleCommands].
 const List<int> kJbdPollCommands = [
   JbdParser.cmdMain, // 0x03 — voltage / current / SOC / capacity / MOS / temps
   JbdParser.cmdCellVoltages, // 0x04 — every cell voltage in one frame
@@ -114,7 +116,6 @@ class BmsBleService {
 
   StreamSubscription<List<int>>? _notifySub;
   StreamSubscription<BluetoothConnectionState>? _connStateSub;
-  Timer? _pollTimer;
 
   /// Serializes every GATT write on [_writeChar] — the poll loop's timer and
   /// a user-triggered control write are otherwise independent call sites
@@ -192,7 +193,10 @@ class BmsBleService {
       AppLogger.instance.d('ble', 'connectionState event: $state');
       if (state == BluetoothConnectionState.disconnected && _connected) {
         _connected = false;
-        _pollTimer?.cancel();
+        // The poll loop is deliberately left running: its writes now fail,
+        // which times out three requests and takes it into _reconnect(). That
+        // is the same recovery path a silently-dead link uses, so an
+        // unexpected disconnect does not need a second one of its own.
         AppLogger.instance.w('ble', 'Unexpected disconnect from $mac');
         _emit(const BleStatus(BleConnectionState.disconnected));
       }
@@ -255,8 +259,7 @@ class BmsBleService {
       );
     }
 
-    _pollTimer?.cancel();
-    _pollTimer = null;
+    _polling = false;
 
     await _notifySub?.cancel();
     _notifySub = null;
@@ -388,67 +391,153 @@ class BmsBleService {
 
   // ── Polling ──────────────────────────────────────────────────────────────
   //
-  // Daly answers one command at a time and has no request pipelining, so the
-  // commands are issued sequentially with a gap between them. 0x95 is the
-  // expensive one: it replies with ceil(cells/3) separate frames, so it gets
-  // extra settle time before the cycle restarts. JBD is simpler — two
-  // commands, one frame each — but is polled with the same sequential
-  // discipline for consistency and because it's untested at this point.
+  // Strictly request/response, one request in flight at a time: send, wait for
+  // a complete frame to reassemble, wait the inter-request gap, send the next.
+  //
+  // There is deliberately NO periodic timer. A fixed timer assumes every reply
+  // takes less than the tick and fires regardless — so a slow or silent BMS
+  // gets a second request stacked on top of the first, and the replies
+  // interleave in the RX buffer where they cannot be told apart. The loop
+  // below cannot outrun the device, because the next request is only scheduled
+  // after the previous one has resolved.
+  //
+  // 0x95/0x96 on Daly are the exception worth knowing about: they answer with
+  // ceil(cells/3) separate frames, so the first frame satisfies the wait and
+  // the remainder land during the gap that follows.
+
+  /// How long a single request may go without a complete frame before it is
+  /// written off as a miss.
+  static const Duration _kFrameTimeout = Duration(milliseconds: 1500);
+
+  /// Minimum gap between consecutive requests, on either protocol.
+  ///
+  /// This is a floor, not a tuning knob. JBD's firmware drops requests issued
+  /// closer together than ~200 ms — it does not error, it simply never
+  /// answers, which surfaces as a timeout blamed on the link rather than on
+  /// the cadence. Daly has no documented equivalent and ran at 120 ms for a
+  /// long time, but the failure it guards against is invisible when it
+  /// happens, so both protocols hold the same floor rather than leaving one
+  /// depending on a limit nobody has actually measured.
+  static const Duration _kRequestGap = Duration(milliseconds: 200);
+
+  /// Extra settle time after a Daly command that fans out into several frames.
+  static const Duration _kDalyMultiFrameGap = Duration(milliseconds: 300);
+
+  /// Idle time between complete cycles. JBD lands near a 1 s dashboard on one
+  /// 0x03 round trip; Daly's nine commands cost ~2 s of gaps on their own, so
+  /// it gets a shorter idle gap to stay near the ~2 s it refreshed at before
+  /// the floor was raised.
+  Duration get _cycleGap => _protocol == BmsProtocol.jbd
+      ? const Duration(milliseconds: 700)
+      : const Duration(milliseconds: 300);
+
+  /// Consecutive requests that produced no complete frame in [_kFrameTimeout].
+  int _consecutiveMisses = 0;
+
+  /// Misses tolerated before the link is treated as lost. Three is enough to
+  /// ride out a single dropped notification without declaring a healthy link
+  /// dead, and short enough that a real drop is caught in ~5 s.
+  static const int _kMissesBeforeReconnect = 3;
+
+  /// Backoff after a failed reconnect attempt, so a BMS that is genuinely out
+  /// of range doesn't spin the radio flat.
+  static const Duration _kReconnectBackoff = Duration(seconds: 3);
+
+  /// True while the poll loop is running; cleared to stop it.
+  bool _polling = false;
+
+  /// Set by the UI when a screen showing per-cell voltages is on top. The
+  /// cell-voltage command is skipped entirely when nothing displays it —
+  /// see [_jbdCycleCommands].
+  bool _cellDetailVisible = false;
+  set cellDetailVisible(bool visible) => _cellDetailVisible = visible;
+
+  /// Counts completed JBD cycles, to space out the cell-voltage command.
+  int _jbdCycle = 0;
+
+  /// Cycles between JBD cell-voltage reads while a cell view is open. Cell
+  /// voltages drift far more slowly than pack current does, so reading them
+  /// every cycle spends half the link's budget refreshing numbers that have
+  /// not changed.
+  static const int _kJbdCellEveryNCycles = 3;
+
   void _startPolling() {
-    _pollOneShots();
-    _poll();
-    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) => _poll());
+    if (_polling) return;
+    _polling = true;
+    unawaited(_pollLoop());
+  }
+
+  Future<void> _pollLoop() async {
+    await _pollOneShots();
+    while (_polling && !_disposed) {
+      try {
+        await _pollCycle();
+      } catch (e) {
+        AppLogger.instance.e('poll', 'Poll cycle error: $e');
+      }
+      if (!_polling || _disposed) return;
+
+      if (_consecutiveMisses >= _kMissesBeforeReconnect) {
+        final ok = await _reconnect();
+        if (!ok) await Future<void>.delayed(_kReconnectBackoff);
+        continue;
+      }
+      await Future<void>.delayed(_cycleGap);
+    }
   }
 
   Future<void> _pollOneShots() async {
     if (_protocol != BmsProtocol.daly) return;
     for (final cmd in kOneShotCommands) {
       if (!_canWrite) return;
-      await _sendDaly(cmd);
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      await _request(() => _sendDaly(cmd));
+      await Future<void>.delayed(_kRequestGap);
     }
   }
 
   bool get _canWrite => _connected && !_disposed && _writeChar != null;
 
-  /// Guards against a slow cycle overlapping the next timer tick.
-  bool _polling = false;
-
-  Future<void> _poll() async {
-    if (_disposed || _writeChar == null) return;
-    // The very first _poll() runs before _connected flips true, so allow it.
-    if (_polling) {
-      AppLogger.instance.d('poll', 'previous cycle still running, skipping tick');
-      return;
+  /// The commands this JBD cycle should issue. 0x03 carries everything the
+  /// dashboard needs and goes out every cycle; 0x04 is appended only when a
+  /// cell view is actually on screen, and then only every Nth cycle. They are
+  /// still issued one at a time by [_pollCycle] — never stacked.
+  List<int> _jbdCycleCommands() {
+    final cmds = <int>[JbdParser.cmdMain];
+    if (_cellDetailVisible && _jbdCycle % _kJbdCellEveryNCycles == 0) {
+      cmds.add(JbdParser.cmdCellVoltages);
     }
-    _polling = true;
+    return cmds;
+  }
+
+  Future<void> _pollCycle() async {
+    if (_disposed || _writeChar == null) return;
 
     final framesAtStart = _validFrames;
-    try {
-      if (_protocol == BmsProtocol.jbd) {
-        for (final cmd in kJbdPollCommands) {
-          if (_disposed || _writeChar == null) return;
-          await _sendJbd(cmd);
-          await Future<void>.delayed(const Duration(milliseconds: 150));
-        }
-      } else {
-        for (final cmd in kPollCommands) {
-          if (_disposed || _writeChar == null) return;
-          await _sendDaly(cmd);
-          // 0x95 and 0x96 fan out into several reply frames; give them room.
+
+    if (_protocol == BmsProtocol.jbd) {
+      final cmds = _jbdCycleCommands();
+      for (var i = 0; i < cmds.length; i++) {
+        if (_disposed || _writeChar == null) return;
+        await _request(() => _sendJbd(cmds[i]));
+        if (_consecutiveMisses >= _kMissesBeforeReconnect) return;
+        if (i < cmds.length - 1) await Future<void>.delayed(_kRequestGap);
+      }
+      _jbdCycle++;
+    } else {
+      for (var i = 0; i < kPollCommands.length; i++) {
+        if (_disposed || _writeChar == null) return;
+        final cmd = kPollCommands[i];
+        await _request(() => _sendDaly(cmd));
+        if (_consecutiveMisses >= _kMissesBeforeReconnect) return;
+        if (i < kPollCommands.length - 1) {
+          // 0x95 and 0x96 fan out into several reply frames; the wait above
+          // returns on the first one, so the rest land in this gap.
           final multiFrame = cmd == BmsParser.cmdCellVoltages ||
               cmd == BmsParser.cmdCellTemps;
           await Future<void>.delayed(
-            multiFrame
-                ? const Duration(milliseconds: 300)
-                : const Duration(milliseconds: 120),
-          );
+              multiFrame ? _kDalyMultiFrameGap : _kRequestGap);
         }
       }
-    } catch (e) {
-      AppLogger.instance.e('poll', 'Poll cycle error: $e');
-    } finally {
-      _polling = false;
     }
 
     if (_validFrames == framesAtStart) {
@@ -459,6 +548,85 @@ class BmsBleService {
     } else {
       _silentCycles = 0;
       _recordHistory();
+    }
+  }
+
+  /// One request/response exchange. Arms the frame waiter *before* sending —
+  /// a nearby BMS can answer inside a single event-loop turn, and arming
+  /// afterwards would miss that reply and time out against a working link.
+  ///
+  /// Returns true if a complete frame arrived in time.
+  Future<bool> _request(Future<void> Function() send) async {
+    final waiter = Completer<void>();
+    _frameWaiter = waiter;
+    try {
+      await send();
+      await waiter.future.timeout(_kFrameTimeout);
+      _consecutiveMisses = 0;
+      return true;
+    } on TimeoutException {
+      // Whatever is sitting in the buffer is a fragment of a reply that never
+      // finished. Keeping it would splice it onto the front of the next reply
+      // and corrupt a frame that was itself fine.
+      _rxBuffer.clear();
+      _consecutiveMisses++;
+      AppLogger.instance.w('poll',
+          'no complete frame in ${_kFrameTimeout.inMilliseconds}ms '
+          '(miss $_consecutiveMisses of $_kMissesBeforeReconnect)');
+      return false;
+    } finally {
+      if (identical(_frameWaiter, waiter)) _frameWaiter = null;
+    }
+  }
+
+  /// Completed by [_onRawBytes] as soon as a full frame parses.
+  Completer<void>? _frameWaiter;
+
+  /// Three misses in a row means the link is gone regardless of what the GATT
+  /// stack still reports — flutter_blue_plus will happily hold a connection
+  /// "connected" long after the BMS has stopped answering, so the miss counter
+  /// is the only signal that reflects the device rather than the phone.
+  Future<bool> _reconnect() async {
+    AppLogger.instance.w('ble',
+        '$_consecutiveMisses consecutive misses — dropping link and reconnecting');
+
+    _connected = false;
+    _emit(const BleStatus(BleConnectionState.connecting));
+
+    try {
+      await _notifySub?.cancel();
+    } catch (_) {}
+    _notifySub = null;
+    try {
+      await _device.disconnect();
+    } catch (_) {}
+
+    // Nothing buffered survives a reconnect: those bytes belong to a session
+    // that no longer exists.
+    _rxBuffer.clear();
+
+    if (_disposed || !_polling) return false;
+
+    try {
+      await _device.connect(autoConnect: false, license: License.free);
+      try {
+        await _device.requestMtu(247);
+      } catch (e) {
+        AppLogger.instance.w('ble', 'MTU request rejected on reconnect: $e');
+      }
+      await _discoverCharacteristics();
+      await _subscribeNotifications();
+      _rxBuffer.clear();
+      _consecutiveMisses = 0;
+      _connected = true;
+      _emit(const BleStatus(BleConnectionState.connected));
+      AppLogger.instance.ok('ble', '✓ Reconnected');
+      await _pollOneShots();
+      return true;
+    } catch (e) {
+      AppLogger.instance.e('ble', '✗ Reconnect failed: $e');
+      _emit(BleStatus(BleConnectionState.error, errorMessage: e.toString()));
+      return false;
     }
   }
 
@@ -625,8 +793,14 @@ class BmsBleService {
       changed = true;
     }
 
-    if (changed && !_snapshotCtrl.isClosed) {
-      _snapshotCtrl.add(_current);
+    if (changed) {
+      // Releases the in-flight request in _request(). Only a frame that
+      // actually parsed counts — a notification carrying half a frame, or an
+      // ack with no state in it, must not be mistaken for the reply.
+      final waiter = _frameWaiter;
+      if (waiter != null && !waiter.isCompleted) waiter.complete();
+
+      if (!_snapshotCtrl.isClosed) _snapshotCtrl.add(_current);
     }
   }
 
