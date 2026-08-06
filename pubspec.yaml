@@ -40,6 +40,10 @@ dependencies:
   mobile_scanner: ^5.2.3
   image_picker: ^1.1.2
   shared_preferences: ^2.5.5
+  # Talks to the Warrior cloud backend for the inverter half of the UI. The
+  # battery half still comes straight off BLE, so the app stays useful with no
+  # network at all — see lib/features/cloud/cloud_api.dart.
+  http: ^1.2.2
 
 dev_dependencies:
   flutter_test:
@@ -67,6 +71,16 @@ flutter:
   assets:
     - assets/branding/warrior_logo.png
     - assets/branding/warrior_loading.gif
+
+  # Archivo is bundled, not fetched. The app is used where there is often no
+  # network — a BLE pairing session in a plant room — and a webfont would drop
+  # the whole UI to a fallback face exactly when someone is reading a fault
+  # code. One variable file covers every weight; see WType in
+  # lib/core/theme/warrior_theme.dart for how the wght axis is driven.
+  fonts:
+    - family: Archivo
+      fonts:
+        - asset: assets/fonts/Archivo.ttf
 
   # To add assets to your application, add an assets section, like this:
   # assets:

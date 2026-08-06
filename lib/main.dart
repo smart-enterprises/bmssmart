@@ -2,7 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'core/theme/m3_theme.dart';
+import 'core/theme/warrior_theme.dart';
 import 'features/bms/presentation/screens/splash_screen.dart';
 
 void main() {
@@ -17,7 +17,7 @@ class SmartBmsApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'SmartBMS',
-      theme: buildM3ThemeData(),
+      theme: buildWarriorTheme(),
       home: const SplashScreen(),
     );
   }

@@ -52,7 +52,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
     if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => HomeShell(initialTabIndex: connected ? 0 : 2),
+        builder: (_) => HomeShell(initialTabIndex: connected ? 0 : kDevicesTabIndex),
       ),
     );
   }
